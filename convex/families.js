@@ -41,6 +41,14 @@ async function getMembership(ctx, familyId, userId) {
     .unique();
 }
 
+async function requireOwner(ctx, familyId, userId) {
+  const membership = await getMembership(ctx, familyId, userId);
+  if (membership === null || membership.role !== "owner") {
+    throw new Error("Only the family owner can manage access");
+  }
+  return membership;
+}
+
 export const listMy = query({
   args: {},
   handler: async (ctx) => {
@@ -234,5 +242,82 @@ export const heartbeat = mutation({
       userId,
       lastSeenAt,
     });
+  },
+});
+
+export const regenerateInviteCode = mutation({
+  args: {
+    familyId: v.id("families"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUserId(ctx);
+    await requireOwner(ctx, args.familyId, userId);
+    const inviteCode = await generateUniqueInviteCode(ctx);
+
+    await ctx.db.patch(args.familyId, { inviteCode });
+    return inviteCode;
+  },
+});
+
+export const removeMember = mutation({
+  args: {
+    familyId: v.id("families"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const ownerId = await requireUserId(ctx);
+    await requireOwner(ctx, args.familyId, ownerId);
+
+    if (args.userId === ownerId) {
+      throw new Error("The family owner cannot be removed");
+    }
+
+    const membership = await getMembership(ctx, args.familyId, args.userId);
+    if (membership === null) {
+      throw new Error("Family member not found");
+    }
+
+    const presence = await ctx.db
+      .query("familyPresence")
+      .withIndex("by_familyId_and_userId", (q) =>
+        q.eq("familyId", args.familyId).eq("userId", args.userId),
+      )
+      .unique();
+
+    await ctx.db.delete(membership._id);
+    if (presence) {
+      await ctx.db.delete(presence._id);
+    }
+
+    return args.userId;
+  },
+});
+
+export const leave = mutation({
+  args: {
+    familyId: v.id("families"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUserId(ctx);
+    const membership = await getMembership(ctx, args.familyId, userId);
+    if (membership === null) {
+      throw new Error("Family not found");
+    }
+    if (membership.role === "owner") {
+      throw new Error("Transfer ownership before leaving this family");
+    }
+
+    const presence = await ctx.db
+      .query("familyPresence")
+      .withIndex("by_familyId_and_userId", (q) =>
+        q.eq("familyId", args.familyId).eq("userId", userId),
+      )
+      .unique();
+    await ctx.db.delete(membership._id);
+    if (presence) {
+      await ctx.db.delete(presence._id);
+    }
+
+    return args.familyId;
   },
 });

@@ -50,6 +50,19 @@ describe("AuthPanel", () => {
     expect(queryArgs[2][1]).toBe("skip");
   });
 
+  test("offers password reset from the sign-in screen", async () => {
+    useConvexAuthMock.mockReturnValue({ isAuthenticated: false });
+    queryMock
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined);
+    const { AuthPanel } = await import("./auth-panel");
+
+    const html = renderToString(<AuthPanel />);
+
+    expect(html).toContain("Forgot password?");
+  });
+
   test("loads families once the user is authenticated", async () => {
     useConvexAuthMock.mockReturnValue({ isAuthenticated: true });
     queryMock

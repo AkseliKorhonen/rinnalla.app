@@ -127,4 +127,61 @@ describe("families", () => {
       ]),
     );
   });
+
+  test("lets owners rotate invite codes and remove members", async () => {
+    const t = convexTest({ schema, modules });
+    const { authed: owner } = await createUser(t, "owner@example.com");
+    const { authed: member, userId: memberId } = await createUser(
+      t,
+      "member@example.com",
+    );
+
+    await owner.mutation(api.families.create, { name: "Korhonen" });
+    const [family] = await owner.query(api.families.listMy, {});
+    await member.mutation(api.families.join, {
+      inviteCode: family.inviteCode,
+    });
+
+    const inviteCode = await owner.mutation(api.families.regenerateInviteCode, {
+      familyId: family._id,
+    });
+    expect(inviteCode).toHaveLength(6);
+    expect(inviteCode).not.toBe(family.inviteCode);
+
+    await owner.mutation(api.families.removeMember, {
+      familyId: family._id,
+      userId: memberId,
+    });
+    await expect(member.query(api.families.listMy, {})).resolves.toEqual([]);
+  });
+
+  test("does not allow members to administer a family or owners to leave", async () => {
+    const t = convexTest({ schema, modules });
+    const { authed: owner, userId: ownerId } = await createUser(
+      t,
+      "owner@example.com",
+    );
+    const { authed: member } = await createUser(t, "member@example.com");
+
+    await owner.mutation(api.families.create, { name: "Korhonen" });
+    const [family] = await owner.query(api.families.listMy, {});
+    await member.mutation(api.families.join, {
+      inviteCode: family.inviteCode,
+    });
+
+    await expect(
+      member.mutation(api.families.regenerateInviteCode, {
+        familyId: family._id,
+      }),
+    ).rejects.toThrow("Only the family owner can manage access");
+    await expect(
+      member.mutation(api.families.removeMember, {
+        familyId: family._id,
+        userId: ownerId,
+      }),
+    ).rejects.toThrow("Only the family owner can manage access");
+    await expect(
+      owner.mutation(api.families.leave, { familyId: family._id }),
+    ).rejects.toThrow("Transfer ownership before leaving this family");
+  });
 });

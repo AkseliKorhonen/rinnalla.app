@@ -15,6 +15,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { FamilyCallPanel } from "./family-call-panel";
 
 type Mode = "signIn" | "signUp";
+type ResetStep = "request" | "verify" | null;
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
 function formatPresence(lastSeenAt: number | null) {
@@ -38,6 +39,8 @@ export function AuthPanel() {
   const [mode, setMode] = useState<Mode>("signIn");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [resetStep, setResetStep] = useState<ResetStep>(null);
+  const [resetCode, setResetCode] = useState("");
   const [familyName, setFamilyName] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [selectedFamilyId, setSelectedFamilyId] = useState<Id<"families"> | null>(
@@ -55,6 +58,9 @@ export function AuthPanel() {
   const createFamily = useMutation(api.families.create);
   const joinFamily = useMutation(api.families.join);
   const heartbeat = useMutation(api.families.heartbeat);
+  const regenerateInviteCode = useMutation(api.families.regenerateInviteCode);
+  const removeMember = useMutation(api.families.removeMember);
+  const leaveFamily = useMutation(api.families.leave);
   const activeFamilyId =
     families && families.length > 0
       ? selectedFamilyId && families.some((family) => family._id === selectedFamilyId)
@@ -146,6 +152,53 @@ export function AuthPanel() {
     }
   };
 
+  const onRequestPasswordReset = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setStatus(null);
+
+    try {
+      await signIn("password", { email, flow: "reset" });
+      setResetStep("verify");
+      setStatus("If an account matches that email, we sent a reset code.");
+    } catch {
+      setStatus("We could not start the password reset. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onVerifyPasswordReset = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setStatus(null);
+
+    try {
+      const result = await signIn("password", {
+        code: resetCode,
+        email,
+        flow: "reset-verification",
+        newPassword: password,
+      });
+      setPassword("");
+      setResetCode("");
+      setResetStep(null);
+      setStatus(
+        result.signingIn
+          ? "Password reset. You are now signed in."
+          : "Password reset. You can now sign in.",
+      );
+    } catch (error) {
+      setStatus(
+        error instanceof Error
+          ? error.message
+          : "That reset code could not be verified.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const onSignOut = async () => {
     setSubmitting(true);
     setStatus(null);
@@ -192,6 +245,57 @@ export function AuthPanel() {
     }
   };
 
+  const onRegenerateInviteCode = async () => {
+    if (!activeFamilyId) {
+      return;
+    }
+    setSubmitting(true);
+    setStatus(null);
+
+    try {
+      const inviteCode = await regenerateInviteCode({ familyId: activeFamilyId });
+      setStatus(`New invite code: ${inviteCode}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not rotate invite code.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onRemoveMember = async (userId: Id<"users">) => {
+    if (!activeFamilyId) {
+      return;
+    }
+    setSubmitting(true);
+    setStatus(null);
+
+    try {
+      await removeMember({ familyId: activeFamilyId, userId });
+      setStatus("Family member removed.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not remove family member.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onLeaveFamily = async () => {
+    if (!activeFamilyId) {
+      return;
+    }
+    setSubmitting(true);
+    setStatus(null);
+
+    try {
+      await leaveFamily({ familyId: activeFamilyId });
+      setStatus("You left the family.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not leave family.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <div className="w-full max-w-5xl rounded-[2rem] border border-stone-800 bg-stone-900/95 p-8 shadow-2xl shadow-black/30 backdrop-blur">
       <p className="text-sm uppercase tracking-[0.35em] text-amber-300">
@@ -209,7 +313,7 @@ export function AuthPanel() {
       </AuthLoading>
 
       <Unauthenticated>
-        <div className="mt-8 flex gap-3">
+        {resetStep === null ? <div className="mt-8 flex gap-3">
           <button
             className={`rounded-full px-4 py-2 text-sm font-medium transition ${
               mode === "signIn"
@@ -232,9 +336,9 @@ export function AuthPanel() {
           >
             Create Account
           </button>
-        </div>
+        </div> : null}
 
-        <form className="mt-6 space-y-4" onSubmit={onSubmit}>
+        {resetStep === null ? <form className="mt-6 space-y-4" onSubmit={onSubmit}>
           <label className="block">
             <span className="mb-2 block text-sm text-stone-300">Email</span>
             <input
@@ -277,7 +381,103 @@ export function AuthPanel() {
                 ? "Create account"
                 : "Sign in"}
           </button>
+          {mode === "signIn" ? (
+            <button
+              className="w-full text-sm text-amber-200 underline underline-offset-4 transition hover:text-amber-100"
+              onClick={() => {
+                setPassword("");
+                setResetStep("request");
+              }}
+              type="button"
+            >
+              Forgot password?
+            </button>
+          ) : null}
         </form>
+        : resetStep === "request" ? (
+          <form className="mt-6 space-y-4" onSubmit={onRequestPasswordReset}>
+            <div>
+              <h2 className="text-xl font-semibold text-stone-50">Reset password</h2>
+              <p className="mt-2 text-sm leading-6 text-stone-300">
+                Enter your email and we will send you a reset code.
+              </p>
+            </div>
+            <label className="block">
+              <span className="mb-2 block text-sm text-stone-300">Email</span>
+              <input
+                autoComplete="email"
+                className="w-full rounded-2xl border border-stone-700 bg-stone-950 px-4 py-3 text-stone-50 outline-none transition focus:border-amber-300"
+                id="reset-email"
+                onChange={(event) => setEmail(event.target.value)}
+                required
+                type="email"
+                value={email}
+              />
+            </label>
+            <button
+              className="w-full rounded-2xl bg-amber-300 px-4 py-3 font-medium text-stone-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={submitting}
+              type="submit"
+            >
+              {submitting ? "Sending..." : "Send reset code"}
+            </button>
+            <button
+              className="w-full text-sm text-stone-300 underline underline-offset-4"
+              onClick={() => setResetStep(null)}
+              type="button"
+            >
+              Back to sign in
+            </button>
+          </form>
+        ) : (
+          <form className="mt-6 space-y-4" onSubmit={onVerifyPasswordReset}>
+            <div>
+              <h2 className="text-xl font-semibold text-stone-50">Enter your reset code</h2>
+              <p className="mt-2 text-sm leading-6 text-stone-300">
+                Check your email for the eight-digit code, then choose a new password.
+              </p>
+            </div>
+            <label className="block">
+              <span className="mb-2 block text-sm text-stone-300">Reset code</span>
+              <input
+                autoComplete="one-time-code"
+                className="w-full rounded-2xl border border-stone-700 bg-stone-950 px-4 py-3 text-stone-50 outline-none transition focus:border-amber-300"
+                id="reset-code"
+                inputMode="numeric"
+                onChange={(event) => setResetCode(event.target.value)}
+                required
+                value={resetCode}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-sm text-stone-300">New password</span>
+              <input
+                autoComplete="new-password"
+                className="w-full rounded-2xl border border-stone-700 bg-stone-950 px-4 py-3 text-stone-50 outline-none transition focus:border-amber-300"
+                id="reset-password"
+                minLength={8}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+                type="password"
+                value={password}
+              />
+            </label>
+            <button
+              className="w-full rounded-2xl bg-amber-300 px-4 py-3 font-medium text-stone-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={submitting}
+              type="submit"
+            >
+              {submitting ? "Resetting..." : "Reset password"}
+            </button>
+            <button
+              className="w-full text-sm text-stone-300 underline underline-offset-4"
+              onClick={() => setResetStep("request")}
+              type="button"
+            >
+              Send a new code
+            </button>
+          </form>
+        )}
       </Unauthenticated>
 
       <Authenticated>
@@ -397,6 +597,20 @@ export function AuthPanel() {
                             {formatPresence(member.lastSeenAt)}
                           </p>
                         </div>
+                        {dashboard.members.find(
+                          (currentMember) =>
+                            currentMember.userId === dashboard.currentUserId,
+                        )?.role === "owner" &&
+                        member.userId !== dashboard.currentUserId ? (
+                          <button
+                            className="mt-4 rounded-xl border border-rose-400/30 px-3 py-2 text-xs font-medium text-rose-100 transition hover:border-rose-300 disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={submitting}
+                            onClick={() => onRemoveMember(member.userId)}
+                            type="button"
+                          >
+                            Remove member
+                          </button>
+                        ) : null}
                       </article>
                     ))}
                   </div>
@@ -441,6 +655,25 @@ export function AuthPanel() {
                           </p>
                         </div>
                       </div>
+                      {family._id === activeFamilyId && family.role === "owner" ? (
+                        <button
+                          className="mt-3 rounded-xl border border-amber-300/30 px-3 py-2 text-xs font-medium text-amber-100 transition hover:border-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={submitting}
+                          onClick={onRegenerateInviteCode}
+                          type="button"
+                        >
+                          Generate new invite code
+                        </button>
+                      ) : family._id === activeFamilyId ? (
+                        <button
+                          className="mt-3 rounded-xl border border-rose-400/30 px-3 py-2 text-xs font-medium text-rose-100 transition hover:border-rose-300 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={submitting}
+                          onClick={onLeaveFamily}
+                          type="button"
+                        >
+                          Leave family
+                        </button>
+                      ) : null}
                     </div>
                   ))
                 )}

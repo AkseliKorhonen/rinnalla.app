@@ -1,7 +1,67 @@
 import { defineSchema, defineTable } from "convex/server";
+import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 
 export default defineSchema({
+  ...authTables,
+  families: defineTable({
+    name: v.string(),
+    createdBy: v.id("users"),
+    inviteCode: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_createdBy", ["createdBy"])
+    .index("by_inviteCode", ["inviteCode"]),
+  familyMembers: defineTable({
+    familyId: v.id("families"),
+    userId: v.id("users"),
+    role: v.union(v.literal("owner"), v.literal("member")),
+    joinedAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_familyId", ["familyId"])
+    .index("by_familyId_and_userId", ["familyId", "userId"]),
+  familyPresence: defineTable({
+    familyId: v.id("families"),
+    userId: v.id("users"),
+    lastSeenAt: v.number(),
+  })
+    .index("by_familyId", ["familyId"])
+    .index("by_userId", ["userId"])
+    .index("by_familyId_and_userId", ["familyId", "userId"]),
+  calls: defineTable({
+    familyId: v.id("families"),
+    callerId: v.id("users"),
+    calleeId: v.id("users"),
+    status: v.union(
+      v.literal("ringing"),
+      v.literal("active"),
+      v.literal("declined"),
+      v.literal("ended"),
+    ),
+    offerSdp: v.string(),
+    answerSdp: v.optional(v.string()),
+    createdAt: v.number(),
+    answeredAt: v.optional(v.number()),
+    endedAt: v.optional(v.number()),
+    endedBy: v.optional(v.id("users")),
+  })
+    .index("by_familyId_and_status", ["familyId", "status"])
+    .index("by_calleeId_and_status", ["calleeId", "status"])
+    .index("by_callerId_and_status", ["callerId", "status"])
+    .index("by_status_and_createdAt", ["status", "createdAt"]),
+  callIceCandidates: defineTable({
+    callId: v.id("calls"),
+    recipientId: v.id("users"),
+    senderId: v.id("users"),
+    candidate: v.string(),
+    sdpMid: v.optional(v.string()),
+    sdpMLineIndex: v.optional(v.number()),
+    usernameFragment: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_callId", ["callId"])
+    .index("by_callId_and_recipientId", ["callId", "recipientId"]),
   notes: defineTable({
     text: v.string(),
     createdAt: v.number(),

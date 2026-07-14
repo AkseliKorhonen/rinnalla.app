@@ -40,6 +40,7 @@ export default defineSchema({
       v.literal("ended"),
     ),
     offerSdp: v.string(),
+    nativeCallId: v.optional(v.string()),
     answerSdp: v.optional(v.string()),
     createdAt: v.number(),
     answeredAt: v.optional(v.number()),
@@ -62,6 +63,14 @@ export default defineSchema({
   })
     .index("by_callId", ["callId"])
     .index("by_callId_and_recipientId", ["callId", "recipientId"]),
+  pushTokens: defineTable({
+    userId: v.id("users"),
+    platform: v.union(v.literal("android"), v.literal("ios")),
+    token: v.string(),
+    updatedAt: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_userId_and_platform", ["userId", "platform"]),
   notes: defineTable({
     text: v.string(),
     createdAt: v.number(),

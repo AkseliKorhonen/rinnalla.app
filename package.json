@@ -1,8 +1,8 @@
 {
-  "name": "vaaritablet",
+  "name": "rinnalla-app",
   "version": "1.0.0",
   "private": true,
-  "description": "",
+  "description": "Stay connected with the people alongside you.",
   "scripts": {
     "dev": "npm run dev --workspace web",
     "dev:web": "npm run dev --workspace web",
@@ -29,19 +29,20 @@
   "bugs": {
     "url": "https://github.com/AkseliKorhonen/VaariTablet/issues"
   },
-  "homepage": "https://github.com/AkseliKorhonen/VaariTablet#readme",
+  "homepage": "https://rinnalla.app",
   "dependencies": {
-    "@auth/core": "^0.37.0",
-    "@convex-dev/auth": "^0.0.91",
+    "@auth/core": "^0.41.1",
+    "@convex-dev/auth": "^0.0.94",
     "@oslojs/crypto": "^1.0.1",
-    "convex": "^1.34.1",
-    "dotenv": "^17.3.1",
+    "convex": "^1.42.1",
+    "dotenv": "^17.4.2",
+    "firebase-admin": "^13.7.0",
     "resend": "^6.17.2"
   },
   "devDependencies": {
     "@edge-runtime/vm": "^5.0.0",
-    "convex-test": "^0.0.46",
-    "next": "^16.2.1",
-    "vitest": "^4.1.2"
+    "convex-test": "^0.0.54",
+    "next": "^16.2.10",
+    "vitest": "^4.1.10"
   }
 }

@@ -26,8 +26,8 @@ export const resendPasswordReset = Resend({
     const { error } = await resend.emails.send({
       from,
       to: [email],
-      subject: "Reset your Vaari Tablet password",
-      text: `Your Vaari Tablet password reset code is ${token}. It expires shortly. If you did not request it, you can ignore this email.`,
+      subject: "Reset your rinnalla.app password",
+      text: `Your rinnalla.app password reset code is ${token}. It expires shortly. If you did not request it, you can ignore this email.`,
     });
 
     if (error) {

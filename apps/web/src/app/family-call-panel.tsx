@@ -124,8 +124,6 @@ export function FamilyCallPanel({
   const endCall = useMutation(api.calls.end);
   const addIceCandidate = useMutation(api.calls.addIceCandidate);
 
-  watchRef.current = callState;
-
   const activeCall = callState?.call ?? null;
   const incomingCall =
     activeCall?.status === "ringing" && activeCall.calleeId === currentUserId
@@ -269,7 +267,6 @@ export function FamilyCallPanel({
     remoteUserIdRef.current = otherUserId;
     setRemoteStream(nextRemoteStream);
     attachStreams(stream, nextRemoteStream);
-    await flushCandidates();
     return connection;
   };
 
@@ -278,12 +275,16 @@ export function FamilyCallPanel({
   }, [attachStreams, localStream, remoteStream]);
 
   useEffect(() => {
+    watchRef.current = callState;
+  }, [callState]);
+
+  useEffect(() => {
     if (activeCall === null) {
       if (currentCallIdRef.current !== null) {
         teardownConnection(true);
       }
-      setBusyUserId(null);
-      return;
+      const resetBusyUser = window.setTimeout(() => setBusyUserId(null), 0);
+      return () => window.clearTimeout(resetBusyUser);
     }
 
     currentCallIdRef.current = activeCall._id;
@@ -305,10 +306,15 @@ export function FamilyCallPanel({
         activeCall.answerSdp &&
         answeredCallIdRef.current !== activeCall._id
       ) {
-        await peerConnectionRef.current.setRemoteDescription(
-          parseDescription(activeCall.answerSdp),
-        );
         answeredCallIdRef.current = activeCall._id;
+        try {
+          await peerConnectionRef.current.setRemoteDescription(
+            parseDescription(activeCall.answerSdp),
+          );
+        } catch (error) {
+          answeredCallIdRef.current = null;
+          throw error;
+        }
       }
 
       await flushCandidates();
@@ -372,6 +378,7 @@ export function FamilyCallPanel({
       await connection.setRemoteDescription(
         parseDescription(incomingCall.offerSdp),
       );
+      await flushCandidates();
       const answer = await connection.createAnswer();
       await connection.setLocalDescription(answer);
       await answerCall({

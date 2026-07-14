@@ -7,6 +7,10 @@ const RINGING_TIMEOUT_MS = 2 * 60 * 1000;
 const ACTIVE_CALL_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const EXPIRY_BATCH_SIZE = 100;
 
+function createNativeCallId() {
+  return crypto.randomUUID();
+}
+
 async function requireUserId(ctx) {
   const userId = await getAuthUserId(ctx);
   if (userId === null) {
@@ -187,14 +191,17 @@ export const start = mutation({
       throw new Error("A call is already in progress");
     }
 
-    return await ctx.db.insert("calls", {
+    const callId = await ctx.db.insert("calls", {
       familyId: args.familyId,
       callerId,
       calleeId: args.calleeId,
       status: "ringing",
       offerSdp: args.offerSdp,
+      nativeCallId: createNativeCallId(),
       createdAt: Date.now(),
     });
+    await ctx.scheduler.runAfter(0, internal.callNotifications.sendIncoming, { callId });
+    return callId;
   },
 });
 

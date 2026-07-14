@@ -1,0 +1,69 @@
+name: Deploy development web app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "convex/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/deploy-development-web.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "github-pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_CONVEX_URL: ${{ vars.DEV_CONVEX_URL }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify development backend URL
+        run: |
+          test -n "$NEXT_PUBLIC_CONVEX_URL" || {
+            echo "Set the DEV_CONVEX_URL repository variable before deploying." >&2
+            exit 1
+          }
+
+      - name: Build static web app
+        run: npm run build --workspace web
+
+      - name: Disable Jekyll processing
+        run: touch apps/web/out/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: apps/web/out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

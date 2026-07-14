@@ -5,4 +5,6 @@ node_modules/
 convex/_generated/
 .next/
 .expo/
+android/
+ios/
 dist/

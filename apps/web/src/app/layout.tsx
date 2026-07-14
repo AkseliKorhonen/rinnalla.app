@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Vaari Tablet",
-  description: "Vaari Tablet web app",
+  title: "rinnalla.app",
+  description: "Stay connected with the people alongside you.",
 };
 
 export default function RootLayout({

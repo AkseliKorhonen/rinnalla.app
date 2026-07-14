@@ -2,7 +2,7 @@ node_modules/
 .env.local
 .env*
 !**/.env.example
-convex/_generated/
+convex/_generated/ai/
 .next/
 .expo/
 android/

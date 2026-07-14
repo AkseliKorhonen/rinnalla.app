@@ -19,17 +19,17 @@ import {
   RTCView,
 } from "react-native-webrtc";
 import {
+  bringCallAppToForeground,
   dismissNativeCall,
   initializeNativeCallService,
   markNativeCallActive,
   setNativeCallHandlers,
   showIncomingNativeCall,
-  showOutgoingNativeCall,
+  waitForCallAppForeground,
 } from "./native-call-service";
 
 type Member = {
   email: string | null;
-  isOnline: boolean;
   name: string | null;
   userId: Id<"users">;
 };
@@ -93,6 +93,11 @@ function parseDescription(serialized: string) {
   return JSON.parse(serialized) as { type: "answer" | "offer"; sdp: string };
 }
 
+function releaseLocalMediaStream(stream: MediaStream) {
+  stream.getTracks().forEach((track) => track.stop());
+  stream.release();
+}
+
 async function requestCameraAndMicrophone() {
   if (Platform.OS === "android") {
     const result = await PermissionsAndroid.requestMultiple([
@@ -112,12 +117,16 @@ async function requestCameraAndMicrophone() {
 export function FamilyCallPanel({ currentUserId, familyId, members }: Props) {
   const connectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const localStreamPromiseRef = useRef<Promise<MediaStream> | null>(null);
+  const mediaRequestGenerationRef = useRef(0);
   const callIdRef = useRef<Id<"calls"> | null>(null);
   const remoteUserIdRef = useRef<Id<"users"> | null>(null);
   const answeredCallIdRef = useRef<Id<"calls"> | null>(null);
+  const acceptingCallIdRef = useRef<Id<"calls"> | null>(null);
   const processedCandidateIdsRef = useRef<Set<Id<"callIceCandidates">>>(new Set());
   const pendingCandidatesRef = useRef<PendingCandidate[]>([]);
-  const remoteTracksRef = useRef<Map<string, RemoteTrack>>(new Map());
+  const remoteFallbackStreamRef = useRef<MediaStream | null>(null);
+  const syncQueueRef = useRef<Promise<void>>(Promise.resolve());
   const watchRef = useRef<CallSnapshot | undefined>(undefined);
   const nativeCallIdRef = useRef<string | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -139,29 +148,50 @@ export function FamilyCallPanel({ currentUserId, familyId, members }: Props) {
     ? activeCall.callerId === currentUserId ? activeCall.calleeId : activeCall.callerId
     : null;
   const remoteMember = members.find((member) => member.userId === remoteUserId);
-  const onlineMembers = members.filter((member) => member.userId !== currentUserId && member.isOnline);
+  const callableMembers = members.filter((member) => member.userId !== currentUserId);
 
   const teardown = () => {
+    mediaRequestGenerationRef.current += 1;
     connectionRef.current?.close();
     connectionRef.current = null;
-    localStreamRef.current?.getTracks().forEach((track) => track.stop());
+    if (localStreamRef.current) releaseLocalMediaStream(localStreamRef.current);
     localStreamRef.current = null;
+    localStreamPromiseRef.current = null;
+    remoteFallbackStreamRef.current?.release();
+    remoteFallbackStreamRef.current = null;
     setLocalStream(null);
     setRemoteStream(null);
     callIdRef.current = null;
     remoteUserIdRef.current = null;
     answeredCallIdRef.current = null;
+    acceptingCallIdRef.current = null;
     processedCandidateIdsRef.current = new Set();
     pendingCandidatesRef.current = [];
-    remoteTracksRef.current = new Map();
   };
 
   const ensureLocalStream = async () => {
     if (localStreamRef.current) return localStreamRef.current;
-    const stream = await requestCameraAndMicrophone();
-    localStreamRef.current = stream;
-    setLocalStream(stream);
-    return stream;
+    if (localStreamPromiseRef.current) return await localStreamPromiseRef.current;
+
+    const generation = mediaRequestGenerationRef.current;
+    const request = (async () => {
+      await waitForCallAppForeground();
+      const stream = await requestCameraAndMicrophone();
+      if (generation !== mediaRequestGenerationRef.current) {
+        releaseLocalMediaStream(stream);
+        throw new Error("The call ended before the camera was ready.");
+      }
+      localStreamRef.current = stream;
+      setLocalStream(stream);
+      return stream;
+    })();
+    localStreamPromiseRef.current = request;
+
+    try {
+      return await request;
+    } finally {
+      if (localStreamPromiseRef.current === request) localStreamPromiseRef.current = null;
+    }
   };
 
   const sendCandidate = async (candidate: PendingCandidate) => {
@@ -181,16 +211,21 @@ export function FamilyCallPanel({ currentUserId, familyId, members }: Props) {
   const flushRemoteCandidates = async () => {
     const connection = connectionRef.current;
     const candidates = watchRef.current?.candidates ?? [];
-    if (!connection) return;
+    if (!connection?.remoteDescription) return;
     for (const candidate of candidates) {
       if (processedCandidateIdsRef.current.has(candidate._id)) continue;
-      await connection.addIceCandidate({
-        candidate: candidate.candidate,
-        sdpMid: candidate.sdpMid,
-        sdpMLineIndex: candidate.sdpMLineIndex,
-        usernameFragment: candidate.usernameFragment,
-      });
       processedCandidateIdsRef.current.add(candidate._id);
+      try {
+        await connection.addIceCandidate({
+          candidate: candidate.candidate,
+          sdpMid: candidate.sdpMid,
+          sdpMLineIndex: candidate.sdpMLineIndex,
+          usernameFragment: candidate.usernameFragment,
+        });
+      } catch (error) {
+        processedCandidateIdsRef.current.delete(candidate._id);
+        throw error;
+      }
     }
   };
 
@@ -201,15 +236,28 @@ export function FamilyCallPanel({ currentUserId, familyId, members }: Props) {
     stream.getTracks().forEach((track) => connection.addTrack(track, stream));
     const events = connection as unknown as NativeConnectionEvents;
     events.ontrack = (event) => {
-      const remoteTracks = event.track ? [event.track] : event.streams[0]?.getTracks() ?? [];
-      for (const track of remoteTracks) {
-        remoteTracksRef.current.set(track.id, track);
+      const nativeStream = event.streams[0];
+      if (nativeStream) {
+        if (event.track?.kind === "video" || nativeStream.getVideoTracks().length > 0) {
+          remoteFallbackStreamRef.current?.release();
+          remoteFallbackStreamRef.current = null;
+          setRemoteStream(nativeStream);
+        }
+        return;
       }
-      const nextRemoteStream = new MediaStream();
-      for (const track of remoteTracksRef.current.values()) {
-        nextRemoteStream.addTrack(track);
+
+      const track = event.track;
+      if (!track) return;
+      const fallback = remoteFallbackStreamRef.current ?? new MediaStream();
+      remoteFallbackStreamRef.current = fallback;
+      if (!fallback.getTracks().some((candidate) => candidate.id === track.id)) {
+        fallback.addTrack(track);
       }
-      setRemoteStream(nextRemoteStream);
+      if (track.kind === "video") {
+        setTimeout(() => {
+          if (remoteFallbackStreamRef.current === fallback) setRemoteStream(fallback);
+        }, 0);
+      }
     };
     events.onicecandidate = (event) => {
       if (!event.candidate) return;
@@ -258,7 +306,9 @@ export function FamilyCallPanel({ currentUserId, familyId, members }: Props) {
       }
       await flushRemoteCandidates();
     };
-    void sync().catch((syncError) => setError(syncError instanceof Error ? syncError.message : "Could not sync call state."));
+    const queuedSync = syncQueueRef.current.catch(() => undefined).then(sync);
+    syncQueueRef.current = queuedSync;
+    void queuedSync.catch((syncError) => setError(syncError instanceof Error ? syncError.message : "Could not sync call state."));
   }, [activeCall, callState, currentUserId]);
 
   useEffect(() => () => teardown(), []);
@@ -277,22 +327,29 @@ export function FamilyCallPanel({ currentUserId, familyId, members }: Props) {
     } finally { setBusy(false); }
   };
 
-  const acceptCall = async () => {
-    if (!incomingCall) return;
+  const acceptCall = async (call: CallSnapshot["call"] = incomingCall) => {
+    if (!call || call.status !== "ringing" || call.calleeId !== currentUserId) return;
+    if (acceptingCallIdRef.current === call._id || answeredCallIdRef.current === call._id) return;
+    acceptingCallIdRef.current = call._id;
     setBusy(true); setError(null);
     try {
-      const connection = await createConnection(incomingCall.callerId);
-      await connection.setRemoteDescription(parseDescription(incomingCall.offerSdp));
+      const connection = await createConnection(call.callerId);
+      await connection.setRemoteDescription(parseDescription(call.offerSdp));
       await flushRemoteCandidates();
       const answer = await connection.createAnswer();
       await connection.setLocalDescription(answer);
-      await answerCall({ callId: incomingCall._id, answerSdp: serializeDescription(answer) });
-      answeredCallIdRef.current = incomingCall._id;
+      await answerCall({ callId: call._id, answerSdp: serializeDescription(answer) });
+      if (call.nativeCallId) markNativeCallActive(call.nativeCallId);
+      else bringCallAppToForeground();
+      answeredCallIdRef.current = call._id;
       await flushPendingCandidates();
       await flushRemoteCandidates();
     } catch (callError) {
       teardown(); setError(callError instanceof Error ? callError.message : "Could not answer the call.");
-    } finally { setBusy(false); }
+    } finally {
+      if (acceptingCallIdRef.current === call._id) acceptingCallIdRef.current = null;
+      setBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -302,45 +359,50 @@ export function FamilyCallPanel({ currentUserId, familyId, members }: Props) {
 
     return setNativeCallHandlers({
       onAnswer: (callId) => {
-        const call = watchRef.current?.call;
+        const snapshot = watchRef.current;
+        if (snapshot === undefined) return false;
+        const call = snapshot.call;
         if (call?._id === callId && call.status === "ringing" && call.calleeId === currentUserId) {
-          void acceptCall();
+          void acceptCall(call);
         }
+        return true;
       },
       onEnd: (callId) => {
-        const call = watchRef.current?.call;
-        if (!call || call._id !== callId) return;
+        const snapshot = watchRef.current;
+        if (snapshot === undefined) return false;
+        const call = snapshot.call;
+        if (!call || call._id !== callId) return true;
         if (call.status === "ringing" && call.calleeId === currentUserId) void declineIncomingCall(call._id);
-        else void hangUp();
+        else void hangUp(call);
+        return true;
       },
     });
   }, [currentUserId]);
 
   useEffect(() => {
     const previousNativeCallId = nativeCallIdRef.current;
-    if (!activeCall?.nativeCallId) {
+    const incomingNativeCallId =
+      activeCall?.calleeId === currentUserId ? activeCall.nativeCallId : undefined;
+
+    if (!incomingNativeCallId || !activeCall) {
       if (previousNativeCallId) dismissNativeCall(previousNativeCallId);
       nativeCallIdRef.current = null;
       return;
     }
 
-    nativeCallIdRef.current = activeCall.nativeCallId;
+    nativeCallIdRef.current = incomingNativeCallId;
     const callerName = labelFor(remoteMember);
     if (activeCall.status === "ringing") {
-      if (activeCall.calleeId === currentUserId) {
-        void showIncomingNativeCall({ callId: activeCall._id, nativeCallId: activeCall.nativeCallId, callerName });
-      } else {
-        void showOutgoingNativeCall({ callId: activeCall._id, nativeCallId: activeCall.nativeCallId, callerName });
-      }
+      void showIncomingNativeCall({ callId: activeCall._id, nativeCallId: incomingNativeCallId, callerName });
     } else if (activeCall.status === "active") {
-      markNativeCallActive(activeCall.nativeCallId);
+      markNativeCallActive(incomingNativeCallId);
     }
   }, [activeCall, currentUserId, remoteMember]);
 
-  const hangUp = async () => {
-    if (!activeCall) return;
+  const hangUp = async (call: CallSnapshot["call"] = activeCall) => {
+    if (!call) return;
     setBusy(true); setError(null);
-    try { await endCall({ callId: activeCall._id }); } catch (callError) { setError(callError instanceof Error ? callError.message : "Could not end the call."); }
+    try { await endCall({ callId: call._id }); } catch (callError) { setError(callError instanceof Error ? callError.message : "Could not end the call."); }
     finally { teardown(); setBusy(false); }
   };
 
@@ -349,8 +411,8 @@ export function FamilyCallPanel({ currentUserId, familyId, members }: Props) {
   return <>
     <Modal animationType="fade" onRequestClose={() => void hangUp()} statusBarTranslucent visible={isConnected}>
       <View style={styles.fullScreenCall}>
-        {remoteStream ? <RTCView mirror={false} objectFit="cover" streamURL={remoteStream.toURL()} style={styles.fullScreenVideo} /> : <Text style={styles.waiting}>Connecting video to {labelFor(remoteMember)}â€¦</Text>}
-        {localStream ? <View style={styles.fullScreenLocal}><RTCView mirror objectFit="cover" streamURL={localStream.toURL()} style={styles.rtcView} /></View> : null}
+        {remoteStream ? <RTCView mirror={false} objectFit="cover" streamURL={remoteStream.toURL()} style={styles.fullScreenVideo} zOrder={0} /> : <Text style={styles.waiting}>Connecting video to {labelFor(remoteMember)}â€¦</Text>}
+        {localStream ? <View style={styles.fullScreenLocal}><RTCView mirror objectFit="cover" streamURL={localStream.toURL()} style={styles.rtcView} zOrder={1} /></View> : null}
         <View style={styles.fullScreenControls}><Action danger disabled={busy} label="End call" onPress={() => void hangUp()} /></View>
       </View>
     </Modal>
@@ -361,11 +423,11 @@ export function FamilyCallPanel({ currentUserId, familyId, members }: Props) {
     {incomingCall ? <View style={styles.incoming}><Text style={styles.incomingText}>{labelFor(remoteMember)} is calling you</Text><View style={styles.row}><Action label="Answer" onPress={() => void acceptCall()} disabled={busy} /><Action label="Decline" onPress={() => void declineIncomingCall(incomingCall._id)} disabled={busy} secondary /></View></View> : null}
     {activeCall && !isConnected ? <>
       <View style={styles.videoGrid}>
-        <View style={styles.video}>{remoteStream ? <RTCView mirror={false} objectFit="cover" streamURL={remoteStream.toURL()} style={styles.rtcView} /> : <Text style={styles.waiting}>Waiting for {labelFor(remoteMember)}…</Text>}</View>
-        <View style={styles.localVideo}>{localStream ? <RTCView mirror objectFit="cover" streamURL={localStream.toURL()} style={styles.rtcView} /> : null}</View>
+        <View style={styles.video}>{remoteStream ? <RTCView mirror={false} objectFit="cover" streamURL={remoteStream.toURL()} style={styles.rtcView} zOrder={0} /> : <Text style={styles.waiting}>Waiting for {labelFor(remoteMember)}…</Text>}</View>
+        <View style={styles.localVideo}>{localStream ? <RTCView mirror objectFit="cover" streamURL={localStream.toURL()} style={styles.rtcView} zOrder={1} /> : null}</View>
       </View>
       <Action label="Hang up" onPress={() => void hangUp()} disabled={busy} danger />
-    </> : !incomingCall ? <View style={styles.members}>{onlineMembers.length === 0 ? <Text style={styles.waiting}>No other family members are online right now.</Text> : onlineMembers.map((member) => <Action key={member.userId} label={`Call ${labelFor(member)}`} onPress={() => void beginCall(member.userId)} disabled={busy} />)}</View> : null}
+    </> : !incomingCall ? <View style={styles.members}>{callableMembers.length === 0 ? <Text style={styles.waiting}>Add another family member to start a call.</Text> : callableMembers.map((member) => <Action key={member.userId} label={`Call ${labelFor(member)}`} onPress={() => void beginCall(member.userId)} disabled={busy} />)}</View> : null}
     {busy ? <ActivityIndicator color="#bae6fd" style={styles.spinner} /> : null}
   </View>
   </>;

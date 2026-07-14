@@ -76,7 +76,7 @@ describe("families", () => {
     ).rejects.toThrow("You are already in this family");
   });
 
-  test("shows online family members in the dashboard", async () => {
+  test("shows every family member in the dashboard without presence data", async () => {
     const t = convexTest({ schema, modules });
     const { authed: owner, userId: ownerId } = await createUser(
       t,
@@ -93,35 +93,21 @@ describe("families", () => {
     await member.mutation(api.families.join, {
       inviteCode: createdFamily.inviteCode,
     });
-    await owner.mutation(api.families.heartbeat, {
-      familyId: createdFamily._id,
-    });
-    await t.run(async (ctx) => {
-      await ctx.db.insert("familyPresence", {
-        familyId: createdFamily._id,
-        userId: memberId,
-        lastSeenAt: Date.now() - 10 * 60 * 1000,
-      });
-    });
-
     const dashboard = await owner.query(api.families.dashboard, {
       familyId: createdFamily._id,
     });
 
-    expect(dashboard.onlineCount).toBe(1);
     expect(dashboard.currentUserId).toBe(ownerId);
     expect(dashboard.members).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           userId: ownerId,
           email: "owner@example.com",
-          isOnline: true,
           role: "owner",
         }),
         expect.objectContaining({
           userId: memberId,
           email: "member@example.com",
-          isOnline: false,
           role: "member",
         }),
       ]),

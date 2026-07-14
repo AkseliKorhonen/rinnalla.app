@@ -16,24 +16,9 @@ import { FamilyCallPanel } from "./family-call-panel";
 
 type Mode = "signIn" | "signUp";
 type ResetStep = "request" | "verify" | null;
-const HEARTBEAT_INTERVAL_MS = 10_000;
 
-function formatPresence(lastSeenAt: number | null) {
-  if (lastSeenAt === null) {
-    return "Waiting for first check-in";
-  }
-
-  const secondsAgo = Math.max(0, Math.round((Date.now() - lastSeenAt) / 1000));
-  if (secondsAgo < 15) {
-    return "Active just now";
-  }
-  if (secondsAgo < 60) {
-    return "Active less than a minute ago";
-  }
-
-  const minutesAgo = Math.round(secondsAgo / 60);
-  return `Last seen ${minutesAgo} min ago`;
-}
+const ANDROID_DEVELOPMENT_APK_URL =
+  "https://github.com/AkseliKorhonen/VaariTablet/releases/download/development/rinnalla-development.apk";
 
 export function AuthPanel() {
   const [mode, setMode] = useState<Mode>("signIn");
@@ -60,7 +45,6 @@ export function AuthPanel() {
   );
   const createFamily = useMutation(api.families.create);
   const joinFamily = useMutation(api.families.join);
-  const heartbeat = useMutation(api.families.heartbeat);
   const regenerateInviteCode = useMutation(api.families.regenerateInviteCode);
   const removeMember = useMutation(api.families.removeMember);
   const leaveFamily = useMutation(api.families.leave);
@@ -81,48 +65,6 @@ export function AuthPanel() {
     const timeout = window.setTimeout(() => setStatus(null), 4_000);
     return () => window.clearTimeout(timeout);
   }, [status]);
-
-  useEffect(() => {
-    if (!activeFamilyId || !isAuthenticated) {
-      return;
-    }
-
-    let cancelled = false;
-    const sendHeartbeat = async () => {
-      try {
-        await heartbeat({ familyId: activeFamilyId });
-      } catch (error) {
-        if (!cancelled) {
-          setStatus(
-            error instanceof Error
-              ? error.message
-              : "Could not update online status.",
-          );
-        }
-      }
-    };
-
-    void sendHeartbeat();
-    const interval = window.setInterval(() => {
-      void sendHeartbeat();
-    }, HEARTBEAT_INTERVAL_MS);
-
-    const onVisibilityOrFocus = () => {
-      if (document.visibilityState === "visible") {
-        void sendHeartbeat();
-      }
-    };
-
-    window.addEventListener("focus", onVisibilityOrFocus);
-    document.addEventListener("visibilitychange", onVisibilityOrFocus);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-      window.removeEventListener("focus", onVisibilityOrFocus);
-      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
-    };
-  }, [activeFamilyId, heartbeat, isAuthenticated]);
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -317,6 +259,66 @@ export function AuthPanel() {
         A simple place for families to see who is available and connect face to face.
       </p>
 
+      <div className="mt-6 flex flex-col gap-4 rounded-2xl border border-amber-300/20 bg-amber-300/[0.06] p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <span
+            aria-hidden="true"
+            className="grid size-11 shrink-0 place-items-center rounded-xl bg-amber-300/10 text-amber-200"
+          >
+            <svg
+              className="size-6"
+              fill="none"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M8 6.5 6.5 4M16 6.5 17.5 4M7 9h10v7.5A1.5 1.5 0 0 1 15.5 18h-7A1.5 1.5 0 0 1 7 16.5V9Zm-2 1.5v5m14-5v5M9.5 18v2m5-2v2"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="1.75"
+              />
+              <circle cx="10" cy="12" fill="currentColor" r=".75" />
+              <circle cx="14" cy="12" fill="currentColor" r=".75" />
+            </svg>
+          </span>
+          <div>
+            <p className="text-sm font-semibold text-stone-100">
+              Android development build
+            </p>
+            <p
+              id="android-build-description"
+              className="mt-1 text-xs leading-5 text-stone-400"
+            >
+              For testing rinnalla.app on an Android phone or tablet.
+            </p>
+          </div>
+        </div>
+        <a
+          aria-describedby="android-build-description"
+          aria-label="Download the rinnalla.app Android development APK"
+          className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-amber-300 px-4 py-2.5 text-sm font-semibold text-stone-950 transition hover:bg-amber-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200"
+          href={ANDROID_DEVELOPMENT_APK_URL}
+        >
+          Download APK
+          <svg
+            aria-hidden="true"
+            className="size-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M12 4v11m0 0 4-4m-4 4-4-4M5 20h14"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+            />
+          </svg>
+        </a>
+      </div>
+
       <AuthLoading>
         <p className="mt-8 text-sm text-stone-400">Checking session...</p>
       </AuthLoading>
@@ -499,14 +501,13 @@ export function AuthPanel() {
             <div className="flex flex-col gap-5 border-b border-stone-800 pb-6 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-sm uppercase tracking-[0.32em] text-emerald-300">
-                  Family Presence
+                  Family calls
                 </p>
                 <h2 className="mt-3 text-3xl font-semibold tracking-tight text-stone-50">
-                  {dashboard?.family.name ?? "Who's online right now?"}
+                  {dashboard?.family.name ?? "Your household"}
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-6 text-stone-300">
-                  Keep the tablet open and you will see which family members are
-                  available in real time.
+                  Call anyone in your household, whenever you need to connect.
                 </p>
               </div>
               <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3">
@@ -529,13 +530,13 @@ export function AuthPanel() {
                     No family connected yet
                   </p>
                   <p className="mt-2 text-sm leading-6 text-stone-400">
-                    Create a household or join with an invite code to start
-                    seeing live presence.
+                    Create a household or join one with an invite code to start
+                    calling your family.
                   </p>
                 </div>
               ) : dashboard === undefined ? (
                 <p className="text-sm text-stone-400">
-                  Syncing who is online...
+                  Loading household...
                 </p>
               ) : (
                 <div className="space-y-5">
@@ -572,22 +573,11 @@ export function AuthPanel() {
                     {dashboard.members.map((member) => (
                       <article
                         key={member.userId}
-                        className={`rounded-3xl border px-5 py-4 transition ${
-                          member.isOnline
-                            ? "border-emerald-400/30 bg-emerald-400/10"
-                            : "border-stone-800 bg-stone-950/70"
-                        }`}
+                        className="rounded-3xl border border-stone-800 bg-stone-950/70 px-5 py-4 transition"
                       >
                         <div className="flex items-start justify-between gap-4">
                           <div>
                             <div className="flex items-center gap-3">
-                              <span
-                                className={`inline-flex h-3 w-3 rounded-full ${
-                                  member.isOnline
-                                    ? "bg-emerald-300 shadow-[0_0_16px_rgba(110,231,183,0.9)]"
-                                    : "bg-stone-600"
-                                }`}
-                              />
                               <p className="text-lg font-semibold text-stone-50">
                                 {member.name ?? member.email ?? "Family member"}
                               </p>
@@ -598,20 +588,6 @@ export function AuthPanel() {
                           </div>
                           <p className="rounded-full border border-stone-700 px-3 py-1 text-xs uppercase tracking-[0.24em] text-stone-300">
                             {member.role}
-                          </p>
-                        </div>
-                        <div className="mt-4 flex items-center justify-between gap-3 text-sm">
-                          <p
-                            className={
-                              member.isOnline
-                                ? "text-emerald-200"
-                                : "text-stone-400"
-                            }
-                          >
-                            {member.isOnline ? "Online now" : "Offline"}
-                          </p>
-                          <p className="text-stone-500">
-                            {formatPresence(member.lastSeenAt)}
                           </p>
                         </div>
                         {dashboard.members.find(
@@ -647,7 +623,7 @@ export function AuthPanel() {
                   <p className="text-sm text-stone-400">Loading families...</p>
                 ) : families.length === 0 ? (
                   <p className="text-sm text-stone-400">
-                    Build your first household to unlock presence.
+                    Create or join a household to call your family.
                   </p>
                 ) : (
                   families.map((family) => (

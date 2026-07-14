@@ -22,6 +22,8 @@ export default defineSchema({
     .index("by_familyId", ["familyId"])
     .index("by_familyId_and_userId", ["familyId", "userId"]),
   familyPresence: defineTable({
+    // Deprecated: retained during the staged removal so existing documents stay
+    // schema-valid. No application code reads or writes this table.
     familyId: v.id("families"),
     userId: v.id("users"),
     lastSeenAt: v.number(),

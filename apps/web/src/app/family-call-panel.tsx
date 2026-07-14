@@ -8,9 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 type Member = {
   email: string | null;
   image: string | null;
-  isOnline: boolean;
   joinedAt: number;
-  lastSeenAt: number | null;
   name: string | null;
   role: "member" | "owner";
   userId: Id<"users">;
@@ -138,8 +136,8 @@ export function FamilyCallPanel({
   const remoteMember = members.find(
     (member) => member.userId === currentRemoteUserId,
   );
-  const onlineMembers = members.filter(
-    (member) => member.userId !== currentUserId && member.isOnline,
+  const callableMembers = members.filter(
+    (member) => member.userId !== currentUserId,
   );
 
   const attachStreams = useCallback(
@@ -507,12 +505,12 @@ export function FamilyCallPanel({
 
       {!isOnCall ? (
         <div className="flex flex-wrap gap-3">
-          {onlineMembers.length === 0 ? (
+          {callableMembers.length === 0 ? (
             <p className="text-sm text-stone-400">
-              No other family members are online to call right now.
+              Add another family member to start a call.
             </p>
           ) : (
-            onlineMembers.map((member) => (
+            callableMembers.map((member) => (
               <button
                 key={member.userId}
                 className="rounded-full border border-sky-300/30 bg-sky-300/10 px-4 py-2 text-sm font-medium text-sky-100 transition hover:border-sky-200 disabled:cursor-not-allowed disabled:opacity-60"

@@ -83,7 +83,6 @@ describe("AuthPanel", () => {
           inviteCode: "ABC123",
         },
         currentUserId: "user_1",
-        onlineCount: 1,
         members: [
           {
             userId: "user_1",
@@ -92,8 +91,6 @@ describe("AuthPanel", () => {
             image: null,
             role: "owner",
             joinedAt: 0,
-            lastSeenAt: Date.now(),
-            isOnline: true,
           },
         ],
       });

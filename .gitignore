@@ -8,3 +8,6 @@ convex/_generated/ai/
 android/
 ios/
 dist/
+
+# Local Android signing credentials
+apps/mobile/credentials/

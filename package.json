@@ -13,7 +13,8 @@
     "build:web": "npm run build --workspace web",
     "lint:web": "npm run lint --workspace web",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "postinstall": "patch-package"
   },
   "workspaces": [
     "apps/*"
@@ -43,6 +44,7 @@
     "@edge-runtime/vm": "^5.0.0",
     "convex-test": "^0.0.54",
     "next": "^16.2.10",
+    "patch-package": "^8.0.1",
     "vitest": "^4.1.10"
   }
 }

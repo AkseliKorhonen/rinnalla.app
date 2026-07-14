@@ -24,7 +24,6 @@ import { FamilyCallPanel } from "./family-call-panel";
 import { registerIncomingCallNotifications } from "./call-notifications";
 
 const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL;
-const HEARTBEAT_INTERVAL_MS = 10_000;
 
 const tokenStorage = {
   getItem: (key: string) => SecureStore.getItemAsync(key),
@@ -234,12 +233,6 @@ function AuthPanel() {
   );
 }
 
-function formatPresence(lastSeenAt: number | null) {
-  if (lastSeenAt === null) return "Waiting for first check-in";
-  const seconds = Math.max(0, Math.round((Date.now() - lastSeenAt) / 1000));
-  return seconds < 15 ? "Active just now" : seconds < 60 ? "Active less than a minute ago" : `Last seen ${Math.round(seconds / 60)} min ago`;
-}
-
 function FamilyHome() {
   const { signOut } = useAuthActions();
   const { isAuthenticated } = useConvexAuth();
@@ -259,7 +252,6 @@ function FamilyHome() {
   }, [status]);
   const createFamily = useMutation(api.families.create);
   const joinFamily = useMutation(api.families.join);
-  const heartbeat = useMutation(api.families.heartbeat);
   const regenerateInviteCode = useMutation(api.families.regenerateInviteCode);
   const removeMember = useMutation(api.families.removeMember);
   const leaveFamily = useMutation(api.families.leave);
@@ -270,14 +262,6 @@ function FamilyHome() {
     ? selectedFamilyId
     : families?.[0]?._id ?? null;
   const dashboard = useQuery(api.families.dashboard, activeFamilyId ? { familyId: activeFamilyId } : "skip");
-
-  useEffect(() => {
-    if (!activeFamilyId) return;
-    const sendHeartbeat = () => void heartbeat({ familyId: activeFamilyId }).catch(() => undefined);
-    sendHeartbeat();
-    const interval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [activeFamilyId, heartbeat]);
 
   useEffect(() => {
     if (process.env.EXPO_PUBLIC_DIRECT_FCM_ENABLED !== "true") return;
@@ -346,18 +330,17 @@ function FamilyHome() {
             <View style={styles.panel}>
               <View style={styles.panelHeader}>
                 <View>
-                  <Text style={styles.panelTitle}>Family presence</Text>
-                  <Text style={styles.panelText}>{dashboard.onlineCount} online now</Text>
+                  <Text style={styles.panelTitle}>Family members</Text>
+                  <Text style={styles.panelText}>Everyone in this household can be called.</Text>
                 </View>
                 <Text style={styles.inviteCode}>{dashboard.family.inviteCode}</Text>
               </View>
               {dashboard.members.map((member) => (
                 <View key={member.userId} style={styles.member}>
                   <View style={styles.memberIdentity}>
-                    <View style={[styles.presenceDot, member.isOnline ? styles.onlineDot : styles.offlineDot]} />
                     <View>
                       <Text style={styles.memberName}>{member.name ?? member.email ?? "Family member"}</Text>
-                      <Text style={styles.memberDetail}>{member.isOnline ? "Online now" : formatPresence(member.lastSeenAt)}</Text>
+                      <Text style={styles.memberDetail}>{member.email ?? "No email available"}</Text>
                     </View>
                   </View>
                   <Text style={styles.role}>{member.role}</Text>
@@ -413,5 +396,5 @@ const styles = StyleSheet.create({
   panelTitle: { color: "#fafaf9", fontSize: 20, fontWeight: "700" }, panelText: { color: "#d6d3d1", fontSize: 14, lineHeight: 20, marginTop: 6 },
   or: { color: "#a8a29e", marginTop: 12, textAlign: "center" }, familyTabs: { flexGrow: 0 }, familyTab: { borderColor: "#44403c", borderRadius: 18, borderWidth: 1, marginRight: 8, paddingHorizontal: 14, paddingVertical: 10 }, familyTabSelected: { backgroundColor: "#fbbf24", borderColor: "#fbbf24" }, familyTabText: { color: "#d6d3d1", fontWeight: "600" }, familyTabSelectedText: { color: "#1c1917", fontWeight: "700" },
   panelHeader: { alignItems: "flex-start", flexDirection: "row", justifyContent: "space-between", marginBottom: 12 }, inviteCode: { color: "#fcd34d", fontFamily: "monospace", fontSize: 16, fontWeight: "700" },
-  member: { borderTopColor: "#44403c", borderTopWidth: 1, gap: 8, paddingVertical: 14 }, memberIdentity: { alignItems: "center", flexDirection: "row", gap: 10 }, presenceDot: { borderRadius: 6, height: 12, width: 12 }, onlineDot: { backgroundColor: "#86efac" }, offlineDot: { backgroundColor: "#57534e" }, memberName: { color: "#fafaf9", fontSize: 16, fontWeight: "600" }, memberDetail: { color: "#a8a29e", fontSize: 13, marginTop: 2 }, role: { color: "#d6d3d1", fontSize: 12, textTransform: "uppercase" }, remove: { color: "#fda4af", fontSize: 13, fontWeight: "700" },
+  member: { borderTopColor: "#44403c", borderTopWidth: 1, gap: 8, paddingVertical: 14 }, memberIdentity: { flexDirection: "row", gap: 10 }, memberName: { color: "#fafaf9", fontSize: 16, fontWeight: "600" }, memberDetail: { color: "#a8a29e", fontSize: 13, marginTop: 2 }, role: { color: "#d6d3d1", fontSize: 12, textTransform: "uppercase" }, remove: { color: "#fda4af", fontSize: 13, fontWeight: "700" },
 });

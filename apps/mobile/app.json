@@ -13,6 +13,7 @@
       "@config-plugins/react-native-callkeep",
       "@react-native-firebase/app",
       "@react-native-firebase/messaging",
+      "./plugins/with-call-lock-screen",
       "expo-status-bar"
     ],
     "ios": {

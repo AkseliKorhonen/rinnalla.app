@@ -1,8 +1,87 @@
 diff --git a/node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/RNCallKeepModule.java b/node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/RNCallKeepModule.java
-index 025480a..dcfdd60 100644
+index 025480a..cdfb011 100644
 --- a/node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/RNCallKeepModule.java
 +++ b/node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/RNCallKeepModule.java
-@@ -434,7 +434,6 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule implements Life
+@@ -30,12 +30,17 @@ import android.content.pm.PackageManager;
+ import android.content.res.Resources;
+ import android.graphics.drawable.BitmapDrawable;
+ import android.graphics.drawable.Icon;
++import android.media.AudioAttributes;
+ import android.media.AudioDeviceInfo;
+ import android.media.AudioManager;
++import android.media.Ringtone;
++import android.media.RingtoneManager;
+ import android.net.Uri;
+ import android.os.Build;
+ import android.os.Bundle;
++import android.os.Handler;
+ import android.os.Looper;
++import android.os.SystemClock;
+ import android.view.WindowManager;
+ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
+@@ -73,9 +78,12 @@ import java.lang.reflect.Array;
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.HashMap;
++import java.util.HashSet;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.ResourceBundle;
++import java.util.Set;
++import java.util.UUID;
+ 
+ import org.json.JSONObject;
+ import org.json.JSONException;
+@@ -112,6 +120,12 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule implements Life
+ 
+     private static final String E_ACTIVITY_DOES_NOT_EXIST = "E_ACTIVITY_DOES_NOT_EXIST";
+     private static final String REACT_NATIVE_MODULE_NAME = "RNCallKeep";
++    private static final String EXTRA_CALL_LAUNCH_TOKEN = "com.rinnalla.app.extra.CALL_LAUNCH_TOKEN";
++    private static final String CALL_LAUNCH_PREFERENCES = "rinnalla-call-screen";
++    private static final String CALL_LAUNCH_TOKEN_KEY = "authorized-launch-token";
++    private static final String CALL_SCREEN_ACTIVE_KEY = "call-screen-active";
++    private static final String CALL_METADATA_PREFERENCES = "rinnalla-native-calls";
++    private static final long INCOMING_RINGTONE_TIMEOUT_MS = 2 * 60 * 1000L;
+     private static String[] permissions = {
+         Build.VERSION.SDK_INT < 30 ? Manifest.permission.READ_PHONE_STATE : Manifest.permission.READ_PHONE_NUMBERS,
+         Manifest.permission.CALL_PHONE,
+@@ -132,6 +146,34 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule implements Life
+     private WritableNativeArray delayedEvents;
+     private boolean hasListeners = false;
+     private boolean hasActiveCall = false;
++    private final Handler incomingRingtoneHandler = new Handler(Looper.getMainLooper());
++    private Ringtone incomingRingtone;
++    private String incomingRingtoneOwner;
++    private long incomingRingtoneStartedAt;
++    private final Runnable incomingRingtoneWatchdog = new Runnable() {
++        @Override
++        public void run() {
++            synchronized (RNCallKeepModule.this) {
++                if (incomingRingtone == null || incomingRingtoneOwner == null) return;
++                if (
++                        SystemClock.elapsedRealtime() - incomingRingtoneStartedAt
++                        >= INCOMING_RINGTONE_TIMEOUT_MS
++                ) {
++                    Log.d(TAG, "[RNCallKeepModule][incomingRingtoneWatchdog] ringtone timed out");
++                    stopIncomingRingtonePlayback(null);
++                    return;
++                }
++                try {
++                    if (!incomingRingtone.isPlaying()) incomingRingtone.play();
++                } catch (RuntimeException error) {
++                    Log.w(TAG, "[RNCallKeepModule][incomingRingtoneWatchdog] could not replay the ringtone", error);
++                    stopIncomingRingtonePlayback(null);
++                    return;
++                }
++                incomingRingtoneHandler.postDelayed(this, 1_000);
++            }
++        }
++    };
+ 
+     public static RNCallKeepModule getInstance(ReactApplicationContext reactContext, boolean realContext) {
+         if (instance == null) {
+@@ -434,7 +476,6 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule implements Life
          this.hasListeners = false;
      }
  
@@ -10,11 +89,397 @@ index 025480a..dcfdd60 100644
      public void displayIncomingCall(String uuid, String number, String callerName) {
          this.displayIncomingCall(uuid, number, callerName, false, null);
      }
-@@ -483,7 +482,6 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule implements Life
+@@ -483,7 +524,6 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule implements Life
          conn.onAnswer();
      }
  
 -    @ReactMethod
      public void startCall(String uuid, String number, String callerName) {
          this.startCall(uuid, number, callerName, false, null);
+     }
+@@ -742,6 +782,7 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule implements Life
+    public void onHostDestroy() {
+        // When activity destroyed end all calls
+        Log.d(TAG, "[RNCallKeepModule] onHostDestroy called");
++       stopIncomingRingtonePlayback(null);
+        if (!isConnectionServiceAvailable() || !hasPhoneAccount()) {
+            Log.w(TAG, "[RNCallKeepModule] onHostDestroy ignored due to no ConnectionService or no phone account");
+            return;
+@@ -1070,6 +1111,296 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule implements Life
+         promise.resolve(hasPhoneAccount());
+     }
+ 
++    @ReactMethod
++    public synchronized void startIncomingRingtone(String nativeCallId) {
++        if (nativeCallId == null || nativeCallId.isEmpty()) return;
++        if (nativeCallId.equals(incomingRingtoneOwner) && incomingRingtone != null) {
++            try {
++                if (!incomingRingtone.isPlaying()) incomingRingtone.play();
++            } catch (RuntimeException error) {
++                Log.w(TAG, "[RNCallKeepModule][startIncomingRingtone] could not resume the ringtone", error);
++                stopIncomingRingtonePlayback(nativeCallId);
++            }
++            return;
++        }
++
++        stopIncomingRingtonePlayback(null);
++        Context context = getAppContext();
++        if (context == null) {
++            Log.w(TAG, "[RNCallKeepModule][startIncomingRingtone] no application context found.");
++            return;
++        }
++
++        Uri ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
++        if (ringtoneUri == null) {
++            Log.d(TAG, "[RNCallKeepModule][startIncomingRingtone] the system ringtone is set to silent.");
++            return;
++        }
++        Ringtone ringtone = RingtoneManager.getRingtone(context, ringtoneUri);
++        if (ringtone == null) {
++            Log.w(TAG, "[RNCallKeepModule][startIncomingRingtone] no system ringtone is available.");
++            return;
++        }
++
++        try {
++            ringtone.setAudioAttributes(new AudioAttributes.Builder()
++                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
++                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
++                    .build());
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) ringtone.setLooping(true);
++            incomingRingtone = ringtone;
++            incomingRingtoneOwner = nativeCallId;
++            incomingRingtoneStartedAt = SystemClock.elapsedRealtime();
++            ringtone.play();
++            incomingRingtoneHandler.postDelayed(incomingRingtoneWatchdog, 1_000);
++            Log.d(TAG, "[RNCallKeepModule][startIncomingRingtone] started for " + nativeCallId);
++        } catch (RuntimeException error) {
++            Log.w(TAG, "[RNCallKeepModule][startIncomingRingtone] could not play the ringtone", error);
++            stopIncomingRingtonePlayback(nativeCallId);
++        }
++    }
++
++    @ReactMethod
++    public synchronized void stopIncomingRingtone(String nativeCallId) {
++        stopIncomingRingtonePlayback(nativeCallId);
++    }
++
++    @ReactMethod
++    public void dismissIncomingCallForForeground(String nativeCallId, Promise promise) {
++        VoiceConnection connection = (VoiceConnection) VoiceConnectionService.getConnection(nativeCallId);
++        if (connection == null) {
++            promise.resolve(false);
++            return;
++        }
++
++        try {
++            // reportDisconnect does not emit ACTION_END_CALL, so moving the
++            // presentation into the app cannot be mistaken for a decline.
++            connection.reportDisconnect(4);
++            stopListenToNativeCallsState();
++            hasActiveCall = false;
++            promise.resolve(true);
++            Log.d(TAG, "[RNCallKeepModule][dismissIncomingCallForForeground] dismissed " + nativeCallId);
++        } catch (RuntimeException error) {
++            promise.reject(
++                    "E_DISMISS_INCOMING_CALL",
++                    "Could not move the incoming call into the application.",
++                    error
++            );
++        }
++    }
++
++    @ReactMethod
++    public void disconnectResolvedIncomingCall(String nativeCallId, int disconnectReason, Promise promise) {
++        VoiceConnection connection = (VoiceConnection) VoiceConnectionService.getConnection(nativeCallId);
++        if (connection == null) {
++            promise.resolve(false);
++            return;
++        }
++
++        if (disconnectReason != 2 && disconnectReason != 4 && disconnectReason != 5) {
++            promise.reject(
++                    "E_INVALID_DISCONNECT_REASON",
++                    "Resolved incoming calls support remote and answered-elsewhere reasons only."
++            );
++            return;
++        }
++
++        try {
++            // reportDisconnect tears down Telecom directly and does not emit
++            // ACTION_END_CALL back to JavaScript.
++            connection.reportDisconnect(disconnectReason);
++            stopListenToNativeCallsState();
++            hasActiveCall = false;
++            promise.resolve(true);
++            Log.d(
++                    TAG,
++                    "[RNCallKeepModule][disconnectResolvedIncomingCall] dismissed "
++                            + nativeCallId + " with reason " + disconnectReason
++            );
++        } catch (RuntimeException error) {
++            promise.reject(
++                    "E_DISCONNECT_RESOLVED_CALL",
++                    "Could not dismiss the resolved incoming call.",
++                    error
++            );
++        }
++    }
++
++    private synchronized void stopIncomingRingtonePlayback(@Nullable String expectedOwner) {
++        if (
++                expectedOwner != null
++                && incomingRingtoneOwner != null
++                && !expectedOwner.equals(incomingRingtoneOwner)
++        ) return;
++
++        incomingRingtoneHandler.removeCallbacks(incomingRingtoneWatchdog);
++        if (incomingRingtone != null) {
++            try {
++                incomingRingtone.stop();
++            } catch (RuntimeException error) {
++                Log.w(TAG, "[RNCallKeepModule][stopIncomingRingtone] could not stop the ringtone", error);
++            }
++        }
++        if (incomingRingtoneOwner != null) {
++            Log.d(TAG, "[RNCallKeepModule][stopIncomingRingtone] stopped for " + incomingRingtoneOwner);
++        }
++        incomingRingtone = null;
++        incomingRingtoneOwner = null;
++        incomingRingtoneStartedAt = 0;
++    }
++
++    @ReactMethod
++    public void setCallAppVisibleOverLockScreen(boolean visible) {
++        Context context = getAppContext();
++        if (context != null) {
++            SharedPreferences.Editor editor = context
++                    .getSharedPreferences(CALL_LAUNCH_PREFERENCES, Context.MODE_PRIVATE)
++                    .edit()
++                    .putBoolean(CALL_SCREEN_ACTIVE_KEY, visible);
++            if (!visible) editor.remove(CALL_LAUNCH_TOKEN_KEY);
++            editor.commit();
++        }
++
++        Activity activity = getCurrentReactActivity();
++        if (activity == null) {
++            Log.d(TAG, "[RNCallKeepModule][setCallAppVisibleOverLockScreen] no current activity; launch intent will apply the call visibility state.");
++            return;
++        }
++
++        activity.runOnUiThread(() -> {
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
++                activity.setShowWhenLocked(visible);
++                activity.setTurnScreenOn(visible);
++                return;
++            }
++
++            int legacyFlags = WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
++                    | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON;
++            if (visible) {
++                activity.getWindow().addFlags(legacyFlags);
++            } else {
++                activity.getWindow().clearFlags(legacyFlags);
++            }
++        });
++    }
++
++    @ReactMethod
++    public void getCallAppVisibleOverLockScreen(Promise promise) {
++        Context context = getAppContext();
++        if (context == null) {
++            promise.resolve(false);
++            return;
++        }
++        boolean visible = context
++                .getSharedPreferences(CALL_LAUNCH_PREFERENCES, Context.MODE_PRIVATE)
++                .getBoolean(CALL_SCREEN_ACTIVE_KEY, false);
++        promise.resolve(visible);
++    }
++
++    @ReactMethod
++    public void storeNativeCallMetadata(String nativeCallId, String callId, @Nullable String familyId, Promise promise) {
++        Context context = getAppContext();
++        if (context == null) {
++            promise.reject("E_ACTIVITY_DOES_NOT_EXIST", "Could not persist native call metadata without an application context.");
++            return;
++        }
++
++        try {
++            JSONObject metadata = new JSONObject();
++            metadata.put("callId", callId);
++            if (familyId != null) metadata.put("familyId", familyId);
++            boolean stored = context
++                    .getSharedPreferences(CALL_METADATA_PREFERENCES, Context.MODE_PRIVATE)
++                    .edit()
++                    .putString(nativeCallId, metadata.toString())
++                    .commit();
++            if (stored) promise.resolve(null);
++            else promise.reject("E_CALL_METADATA", "Could not persist native call metadata.");
++        } catch (JSONException error) {
++            promise.reject("E_CALL_METADATA", "Could not encode native call metadata.", error);
++        }
++    }
++
++    @ReactMethod
++    public void getNativeCallMetadata(String nativeCallId, Promise promise) {
++        Context context = getAppContext();
++        if (context == null) {
++            promise.resolve(null);
++            return;
++        }
++
++        String serialized = context
++                .getSharedPreferences(CALL_METADATA_PREFERENCES, Context.MODE_PRIVATE)
++                .getString(nativeCallId, null);
++        if (serialized == null) {
++            promise.resolve(null);
++            return;
++        }
++
++        try {
++            JSONObject metadata = new JSONObject(serialized);
++            WritableMap result = Arguments.createMap();
++            result.putString("callId", metadata.getString("callId"));
++            if (metadata.has("familyId")) result.putString("familyId", metadata.getString("familyId"));
++            promise.resolve(result);
++        } catch (JSONException error) {
++            promise.reject("E_CALL_METADATA", "Could not decode native call metadata.", error);
++        }
++    }
++
++    @ReactMethod
++    public void removeNativeCallMetadata(String nativeCallId) {
++        Context context = getAppContext();
++        if (context == null) return;
++        context
++                .getSharedPreferences(CALL_METADATA_PREFERENCES, Context.MODE_PRIVATE)
++                .edit()
++                .remove(nativeCallId)
++                .apply();
++    }
++
++    private static Intent createAuthorizedCallLaunchIntent(Context context) {
++        String packageName = context.getApplicationContext().getPackageName();
++        Intent launchIntent = context.getPackageManager().getLaunchIntentForPackage(packageName);
++        if (launchIntent == null) return null;
++
++        Intent focusIntent = launchIntent.cloneFilter();
++        String launchToken = UUID.randomUUID().toString();
++        SharedPreferences launchPreferences = context.getSharedPreferences(
++                CALL_LAUNCH_PREFERENCES,
++                Context.MODE_PRIVATE
++        );
++        boolean tokenStored;
++        synchronized (RNCallKeepModule.class) {
++            Set<String> storedTokens = launchPreferences.getStringSet(CALL_LAUNCH_TOKEN_KEY, null);
++            Set<String> authorizedTokens = storedTokens == null
++                    ? new HashSet<>()
++                    : new HashSet<>(storedTokens);
++            authorizedTokens.add(launchToken);
++            tokenStored = launchPreferences
++                    .edit()
++                    .putStringSet(CALL_LAUNCH_TOKEN_KEY, authorizedTokens)
++                    .putBoolean(CALL_SCREEN_ACTIVE_KEY, true)
++                    .commit();
++        }
++        if (!tokenStored) {
++            Log.w(TAG, "[RNCallKeepModule] could not authorize the call-screen launch.");
++        }
++        focusIntent.putExtra(EXTRA_CALL_LAUNCH_TOKEN, launchToken);
++        return focusIntent;
++    }
++
++    public static void openCallAppForIncomingCall(Context context) {
++        Intent focusIntent = createAuthorizedCallLaunchIntent(context);
++        if (focusIntent == null) {
++            Log.w(TAG, "[RNCallKeepModule] could not find the application launch intent.");
++            return;
++        }
++        focusIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        context.getApplicationContext().startActivity(focusIntent);
++    }
++
+     @ReactMethod
+     public void backToForeground() {
+         Context context = getAppContext();
+@@ -1077,8 +1408,11 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule implements Life
+             Log.w(TAG, "[RNCallKeepModule][backToForeground] no react context found.");
+             return;
+         }
+-        String packageName = context.getApplicationContext().getPackageName();
+-        Intent focusIntent = context.getPackageManager().getLaunchIntentForPackage(packageName).cloneFilter();
++        Intent focusIntent = createAuthorizedCallLaunchIntent(context);
++        if (focusIntent == null) {
++            Log.w(TAG, "[RNCallKeepModule][backToForeground] could not find the application launch intent.");
++            return;
++        }
+         Activity activity = getCurrentReactActivity();
+         boolean isOpened = activity != null;
+         Log.d(TAG, "[RNCallKeepModule] backToForeground, app isOpened ?" + (isOpened ? "true" : "false"));
+@@ -1087,10 +1421,7 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule implements Life
+             focusIntent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+             activity.startActivity(focusIntent);
+         } else {
+-            focusIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK +
+-                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED +
+-                    WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD +
+-                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
++            focusIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+ 
+             getReactApplicationContext().startActivity(focusIntent);
+         }
+diff --git a/node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/VoiceConnection.java b/node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/VoiceConnection.java
+index 1ea76fb..fb5ea30 100644
+--- a/node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/VoiceConnection.java
++++ b/node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/VoiceConnection.java
+@@ -54,6 +54,8 @@ import static io.wazo.callkeep.Constants.ACTION_DID_CHANGE_AUDIO_ROUTE;
+ 
+ @TargetApi(Build.VERSION_CODES.M)
+ public class VoiceConnection extends Connection {
++    private static final int CALL_EVENT_RETRY_DELAY_MS = 250;
++    private static final int CALL_EVENT_RETRY_LIMIT = 40;
+     private boolean isMuted = false;
+     private boolean answered = false;
+     private boolean rejected = false;
+@@ -341,8 +343,15 @@ public class VoiceConnection extends Connection {
+      * Send call request to the RNCallKeepModule
+      */
+     private void sendCallRequestToActivity(final String action, @Nullable final HashMap attributeMap) {
+-        final VoiceConnection instance = this;
+-        final Handler handler = new Handler();
++        sendCallRequestToActivity(action, attributeMap, 0);
++    }
++
++    private void sendCallRequestToActivity(
++        final String action,
++        @Nullable final HashMap attributeMap,
++        final int attempt
++    ) {
++        final Handler handler = new Handler(context.getMainLooper());
+ 
+         handler.post(new Runnable() {
+             @Override
+@@ -353,7 +362,22 @@ public class VoiceConnection extends Connection {
+                     extras.putSerializable("attributeMap", attributeMap);
+                     intent.putExtras(extras);
+                 }
+-                LocalBroadcastManager.getInstance(context).sendBroadcast(intent);
++                boolean delivered = LocalBroadcastManager.getInstance(context).sendBroadcast(intent);
++                boolean shouldRetry =
++                    ACTION_ANSWER_CALL.equals(action) || ACTION_END_CALL.equals(action);
++                if (
++                    !delivered &&
++                    shouldRetry &&
++                    attempt < CALL_EVENT_RETRY_LIMIT
++                ) {
++                    if (attempt == 0 && ACTION_ANSWER_CALL.equals(action)) {
++                        RNCallKeepModule.openCallAppForIncomingCall(context);
++                    }
++                    handler.postDelayed(
++                        () -> sendCallRequestToActivity(action, attributeMap, attempt + 1),
++                        CALL_EVENT_RETRY_DELAY_MS
++                    );
++                }
+             }
+         });
      }

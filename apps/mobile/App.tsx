@@ -6,6 +6,7 @@ import { StatusBar } from "expo-status-bar";
 import {
   ActivityIndicator,
   Pressable,
+  Platform,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -19,11 +20,49 @@ import {
   useMutation,
   useQuery,
 } from "convex/react";
-import { useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { FamilyCallPanel } from "./family-call-panel";
 import { registerIncomingCallNotifications } from "./call-notifications";
+import {
+  getDeviceId,
+  setCallNotificationsEnabled,
+} from "./device-identity";
+import {
+  forceClearCallAppLockScreenVisibility,
+  getCallAppLockScreenVisibility,
+  initializeNativeCallService,
+  subscribeToCallAppLockScreenVisibility,
+} from "./native-call-service";
 
 const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL;
+const REGISTRATION_CLEANUP_TIMEOUT_MS = 3_000;
+const REGISTRATION_RETRY_MAX_MS = 60_000;
+
+async function waitForPromisesWithTimeout(
+  promises: Promise<unknown>[],
+  timeoutMs: number,
+) {
+  if (promises.length === 0) return true;
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<false>((resolve) => {
+    timeout = setTimeout(() => resolve(false), timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      Promise.allSettled(promises).then(() => true as const),
+      timedOut,
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 const tokenStorage = {
   getItem: (key: string) => SecureStore.getItemAsync(key),
@@ -242,8 +281,21 @@ function FamilyHome() {
   const [familyName, setFamilyName] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [pendingIncomingFamilyId, setPendingIncomingFamilyId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [notificationRegistrationEpoch, setNotificationRegistrationEpoch] = useState(0);
+  const activeNotificationListenersRef = useRef(new Set<() => void>());
+  const notificationRegistrationsRef = useRef(new Set<Promise<() => void>>());
+  const pushTokenRegistrationsRef = useRef(new Set<Promise<unknown>>());
+  const signingOutRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     if (status === null) return;
@@ -257,18 +309,195 @@ function FamilyHome() {
   const leaveFamily = useMutation(api.families.leave);
   const updateName = useMutation(api.users.updateName);
   const registerPushToken = useMutation(api.pushTokens.register);
+  const unregisterPushDevice = useMutation(api.pushTokens.unregisterDevice);
+  const registerPushTokenForDevice = useCallback((args: {
+    deviceId: string;
+    platform: "android" | "ios";
+    token: string;
+  }) => {
+    if (signingOutRef.current) return Promise.resolve(null);
+    const operation = registerPushToken(args);
+    pushTokenRegistrationsRef.current.add(operation);
+    void operation.then(
+      () => { pushTokenRegistrationsRef.current.delete(operation); },
+      () => { pushTokenRegistrationsRef.current.delete(operation); },
+    );
+    return operation;
+  }, [registerPushToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getDeviceId()
+      .then((nextDeviceId) => {
+        if (!cancelled) setDeviceId(nextDeviceId);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setStatus(getErrorMessage(error, "Could not prepare this device for calls."));
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const activeFamilyId = families?.some((family) => family._id === selectedFamilyId)
     ? selectedFamilyId
     : families?.[0]?._id ?? null;
+  const selectFamilyForIncomingCall = useCallback((familyId?: string) => {
+    if (!familyId) return;
+    const family = families?.find((candidate) => candidate._id === familyId);
+    if (family) {
+      setPendingIncomingFamilyId(null);
+      setSelectedFamilyId(family._id);
+    } else {
+      setPendingIncomingFamilyId(familyId);
+    }
+  }, [families]);
+
+  useEffect(() => {
+    if (!pendingIncomingFamilyId || families === undefined) return;
+    const family = families.find((candidate) => candidate._id === pendingIncomingFamilyId);
+    setPendingIncomingFamilyId(null);
+    if (family) setSelectedFamilyId(family._id);
+  }, [families, pendingIncomingFamilyId]);
   const dashboard = useQuery(api.families.dashboard, activeFamilyId ? { familyId: activeFamilyId } : "skip");
 
   useEffect(() => {
-    if (process.env.EXPO_PUBLIC_DIRECT_FCM_ENABLED !== "true") return;
+    if (
+      process.env.EXPO_PUBLIC_DIRECT_FCM_ENABLED !== "true" ||
+      deviceId === null ||
+      signingOutRef.current
+    ) return;
+    const notificationDeviceId = deviceId;
+    let cancelled = false;
     let cleanup: (() => void) | undefined;
-    void registerIncomingCallNotifications(registerPushToken).then((unsubscribe) => { cleanup = unsubscribe; }).catch(() => undefined);
-    return () => cleanup?.();
-  }, [registerPushToken]);
+    let failedAttempts = 0;
+    let retryTimeout: ReturnType<typeof setTimeout> | undefined;
+
+    function scheduleRetry() {
+      if (cancelled || signingOutRef.current || retryTimeout) return;
+      const delay = Math.min(
+        REGISTRATION_RETRY_MAX_MS,
+        1_000 * (2 ** Math.min(failedAttempts, 6)),
+      );
+      failedAttempts += 1;
+      retryTimeout = setTimeout(() => {
+        retryTimeout = undefined;
+        attemptRegistration();
+      }, delay);
+    }
+
+    function attemptRegistration() {
+      if (cancelled || signingOutRef.current) return;
+      const registration = registerIncomingCallNotifications(
+        registerPushTokenForDevice,
+        selectFamilyForIncomingCall,
+        notificationDeviceId,
+        () => !cancelled && !signingOutRef.current,
+      );
+      notificationRegistrationsRef.current.add(registration);
+      void registration
+        .then((unsubscribe) => {
+          failedAttempts = 0;
+          if (cancelled || signingOutRef.current) {
+            unsubscribe();
+          } else {
+            let stopped = false;
+            const stop = () => {
+              if (stopped) return;
+              stopped = true;
+              activeNotificationListenersRef.current.delete(stop);
+              unsubscribe();
+            };
+            cleanup = stop;
+            activeNotificationListenersRef.current.add(stop);
+          }
+        })
+        .catch(() => {
+          scheduleRetry();
+        })
+        .finally(() => {
+          notificationRegistrationsRef.current.delete(registration);
+        });
+    }
+
+    attemptRegistration();
+    return () => {
+      cancelled = true;
+      if (retryTimeout) clearTimeout(retryTimeout);
+      if (cleanup) {
+        cleanup();
+      }
+    };
+  }, [
+    deviceId,
+    notificationRegistrationEpoch,
+    registerPushTokenForDevice,
+    selectFamilyForIncomingCall,
+  ]);
+
+  const signOutFromDevice = async () => {
+    if (signingOutRef.current) return;
+    signingOutRef.current = true;
+    setSubmitting(true);
+    const cleanupDeadline = Date.now() + REGISTRATION_CLEANUP_TIMEOUT_MS;
+    const waitForCleanup = (promises: Promise<unknown>[]) =>
+      waitForPromisesWithTimeout(
+        promises,
+        Math.max(0, cleanupDeadline - Date.now()),
+      );
+    let unregisterOperation: Promise<unknown> | null = null;
+    let unregisterSettled = true;
+
+    try {
+      // Disable delivery locally first so already-queued pushes cannot open a
+      // call surface after the user has chosen to sign out.
+      await waitForCleanup([setCallNotificationsEnabled(false)]);
+      for (const unsubscribe of [...activeNotificationListenersRef.current]) {
+        activeNotificationListenersRef.current.delete(unsubscribe);
+        try { unsubscribe(); } catch { /* Best effort. */ }
+      }
+      await waitForCleanup([
+        ...notificationRegistrationsRef.current,
+        ...pushTokenRegistrationsRef.current,
+      ]);
+      unregisterOperation = (async () => {
+        const currentDeviceId = deviceId ?? await getDeviceId();
+        return await unregisterPushDevice({ deviceId: currentDeviceId });
+      })();
+      unregisterSettled = await waitForCleanup([unregisterOperation]);
+      await waitForCleanup([setCallNotificationsEnabled(false)]);
+    } finally {
+      let signedOut = false;
+      try {
+        await signOut();
+        signedOut = true;
+      } catch (error) {
+        setStatus(getErrorMessage(error, "Could not sign out."));
+      } finally {
+        // A successful sign-out unmounts this authenticated view. If it fails,
+        // allow the user to retry instead of leaving the button disabled.
+        if (!signedOut) {
+          signingOutRef.current = false;
+          setSubmitting(false);
+          setNotificationRegistrationEpoch((epoch) => epoch + 1);
+          if (!unregisterSettled && unregisterOperation) {
+            void unregisterOperation.then(
+              () => {
+                if (mountedRef.current && !signingOutRef.current) {
+                  setNotificationRegistrationEpoch((epoch) => epoch + 1);
+                }
+              },
+              () => {
+                if (mountedRef.current && !signingOutRef.current) {
+                  setNotificationRegistrationEpoch((epoch) => epoch + 1);
+                }
+              },
+            );
+          }
+        }
+      }
+    }
+  };
 
   const perform = async (operation: () => Promise<void>, success: string) => {
     setSubmitting(true);
@@ -293,7 +522,7 @@ function FamilyHome() {
           <Text style={styles.homeTitle}>{dashboard?.family.name ?? "Your families"}</Text>
           <Text style={styles.panelText}>{user?.name ?? user?.email ?? ""}</Text>
         </View>
-        <Pressable onPress={() => void signOut()}><Text style={styles.link}>Sign out</Text></Pressable>
+        <Pressable onPress={() => void signOutFromDevice()}><Text style={styles.link}>Sign out</Text></Pressable>
       </View>
 
       {families === undefined ? <ActivityIndicator color="#fbbf24" size="large" /> : families.length === 0 ? (
@@ -322,11 +551,20 @@ function FamilyHome() {
           </ScrollView>
 
           {dashboard ? <>
-            <FamilyCallPanel
-              currentUserId={dashboard.currentUserId}
-              familyId={dashboard.family._id}
-              members={dashboard.members}
-            />
+            {deviceId === null ? (
+              <View style={styles.panel}>
+                <ActivityIndicator color="#fbbf24" size="large" />
+                <Text style={styles.panelText}>Preparing secure calling on this device...</Text>
+              </View>
+            ) : (
+              <FamilyCallPanel
+                currentUserId={dashboard.currentUserId}
+                deviceId={deviceId}
+                familyId={dashboard.family._id}
+                members={dashboard.members}
+                onSelectFamily={selectFamilyForIncomingCall}
+              />
+            )}
             <View style={styles.panel}>
               <View style={styles.panelHeader}>
                 <View>
@@ -363,16 +601,55 @@ function AppContent() {
   return isAuthenticated ? <FamilyHome /> : <AuthPanel />;
 }
 
+function CallLaunchPrivacyGuard() {
+  const shouldInitializeNativeCalling =
+    Platform.OS === "android" && process.env.EXPO_PUBLIC_DIRECT_FCM_ENABLED === "true";
+  const [isNativeCallStateReady, setIsNativeCallStateReady] = useState(
+    !shouldInitializeNativeCalling,
+  );
+  const isCallLaunchVisible = useSyncExternalStore(
+    subscribeToCallAppLockScreenVisibility,
+    getCallAppLockScreenVisibility,
+    getCallAppLockScreenVisibility,
+  );
+
+  useEffect(() => {
+    if (!shouldInitializeNativeCalling) return;
+    let mounted = true;
+    void initializeNativeCallService()
+      .then(() => {
+        if (mounted) setIsNativeCallStateReady(true);
+      })
+      .catch(() => {
+        forceClearCallAppLockScreenVisibility();
+        if (mounted) setIsNativeCallStateReady(true);
+      });
+    return () => { mounted = false; };
+  }, [shouldInitializeNativeCalling]);
+
+  if (isNativeCallStateReady && !isCallLaunchVisible) return null;
+  return (
+    <View accessibilityViewIsModal style={styles.callLaunchPrivacyGuard}>
+      <ActivityIndicator color="#bae6fd" size="large" />
+      <Text style={styles.callLaunchPrivacyText}>
+        {isCallLaunchVisible ? "Opening your call…" : "Starting rinnalla.app…"}
+      </Text>
+    </View>
+  );
+}
+
 export default function App() {
   if (!convex) {
-    return <SafeAreaView style={styles.safeArea}><StatusBar style="light" /><View style={styles.loading}><Text style={styles.title}>Connect rinnalla.app</Text><Text style={styles.body}>Set EXPO_PUBLIC_CONVEX_URL in apps/mobile/.env.local.</Text></View></SafeAreaView>;
+    return <SafeAreaView style={styles.safeArea}><StatusBar style="light" /><View style={styles.loading}><Text style={styles.title}>Connect rinnalla.app</Text><Text style={styles.body}>Set EXPO_PUBLIC_CONVEX_URL in apps/mobile/.env.local.</Text></View><CallLaunchPrivacyGuard /></SafeAreaView>;
   }
-  return <SafeAreaView style={styles.safeArea}><StatusBar style="light" /><ConvexAuthProvider client={convex} storage={tokenStorage}><AppContent /></ConvexAuthProvider></SafeAreaView>;
+  return <SafeAreaView style={styles.safeArea}><StatusBar style="light" /><ConvexAuthProvider client={convex} storage={tokenStorage}><AppContent /></ConvexAuthProvider><CallLaunchPrivacyGuard /></SafeAreaView>;
 }
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: "#111111" },
   loading: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "#111111" },
+  callLaunchPrivacyGuard: { alignItems: "center", backgroundColor: "#020617", bottom: 0, elevation: 100, gap: 14, justifyContent: "center", left: 0, padding: 24, position: "absolute", right: 0, top: 0, zIndex: 1000 },
+  callLaunchPrivacyText: { color: "#e2e8f0", fontSize: 16, fontWeight: "600", textAlign: "center" },
   authContent: { flexGrow: 1, justifyContent: "center", padding: 24, backgroundColor: "#111111" },
   homeContent: { gap: 16, padding: 20, paddingBottom: 40, backgroundColor: "#111111" },
   kicker: { color: "#fbbf24", fontSize: 12, fontWeight: "700", letterSpacing: 3, marginBottom: 12 },

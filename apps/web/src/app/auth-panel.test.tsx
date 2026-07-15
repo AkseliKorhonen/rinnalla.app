@@ -2,7 +2,10 @@ import { renderToString } from "react-dom/server";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 const queryMock = vi.fn();
-const mutationMock = vi.fn(() => vi.fn());
+const mutationMock = vi.fn((reference?: unknown) => {
+  void reference;
+  return vi.fn();
+});
 const useConvexAuthMock = vi.fn();
 const useAuthActionsMock = vi.fn(() => ({
   signIn: vi.fn(),
@@ -14,7 +17,7 @@ vi.mock("convex/react", () => ({
   AuthLoading: () => null,
   Unauthenticated: ({ children }: { children: ReactNode }) => children,
   useConvexAuth: () => useConvexAuthMock(),
-  useMutation: (...args: unknown[]) => mutationMock(...args),
+  useMutation: (reference: unknown) => mutationMock(reference),
   useQuery: (...args: unknown[]) => queryMock(...args),
 }));
 

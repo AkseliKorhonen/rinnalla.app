@@ -43,7 +43,9 @@ export default defineSchema({
     ),
     offerSdp: v.string(),
     nativeCallId: v.optional(v.string()),
+    callerDeviceId: v.optional(v.string()),
     answerSdp: v.optional(v.string()),
+    answeredByDeviceId: v.optional(v.string()),
     createdAt: v.number(),
     answeredAt: v.optional(v.number()),
     endedAt: v.optional(v.number()),
@@ -57,6 +59,7 @@ export default defineSchema({
     callId: v.id("calls"),
     recipientId: v.id("users"),
     senderId: v.id("users"),
+    senderDeviceId: v.optional(v.string()),
     candidate: v.string(),
     sdpMid: v.optional(v.string()),
     sdpMLineIndex: v.optional(v.number()),
@@ -64,14 +67,21 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_callId", ["callId"])
-    .index("by_callId_and_recipientId", ["callId", "recipientId"]),
+    .index("by_callId_and_recipientId", ["callId", "recipientId"])
+    .index("by_callId_and_recipientId_and_senderDeviceId", [
+      "callId",
+      "recipientId",
+      "senderDeviceId",
+    ]),
   pushTokens: defineTable({
     userId: v.id("users"),
     platform: v.union(v.literal("android"), v.literal("ios")),
     token: v.string(),
+    deviceId: v.optional(v.string()),
     updatedAt: v.number(),
   })
     .index("by_token", ["token"])
+    .index("by_userId_and_deviceId", ["userId", "deviceId"])
     .index("by_userId_and_platform", ["userId", "platform"]),
   notes: defineTable({
     text: v.string(),

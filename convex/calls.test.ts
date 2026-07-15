@@ -57,6 +57,15 @@ describe("calls", () => {
       offerSdp: '{"type":"offer","sdp":"offer-sdp"}',
     });
 
+    const notificationPayload = await t.query(
+      internal.callNotificationData.getIncomingCallPayload,
+      { callId },
+    );
+    expect(notificationPayload).toMatchObject({
+      callId,
+      familyId: family._id,
+    });
+
     await owner.mutation(api.calls.addIceCandidate, {
       callId,
       recipientId: memberId,
@@ -91,6 +100,7 @@ describe("calls", () => {
       status: "active",
       answerSdp: '{"type":"answer","sdp":"answer-sdp"}',
     });
+    await owner.mutation(api.calls.end, { callId });
   });
 
   test("expires abandoned calls and deletes their signaling candidates", async () => {
@@ -141,5 +151,348 @@ describe("calls", () => {
         .take(10),
     );
     expect(candidates).toEqual([]);
+  });
+
+  test("prevents a user from joining calls in two families at once", async () => {
+    const t = convexTest({ schema, modules });
+    const { authed: owner } = await createUser(t, "owner@example.com");
+    const { authed: member, userId: memberId } = await createUser(
+      t,
+      "member@example.com",
+    );
+
+    await owner.mutation(api.families.create, { name: "First family" });
+    await owner.mutation(api.families.create, { name: "Second family" });
+    const families = await owner.query(api.families.listMy, {});
+    for (const family of families) {
+      await member.mutation(api.families.join, { inviteCode: family.inviteCode });
+    }
+
+    await owner.mutation(api.calls.start, {
+      familyId: families[0]._id,
+      calleeId: memberId,
+      offerSdp: "first-offer",
+    });
+
+    await expect(owner.mutation(api.calls.start, {
+      familyId: families[1]._id,
+      calleeId: memberId,
+      offerSdp: "second-offer",
+    })).rejects.toThrow("A call is already in progress");
+  });
+
+  test("assigns an active call to the first answering device and scopes signaling", async () => {
+    const t = convexTest({ schema, modules });
+    const { authed: caller, userId: callerId } = await createUser(
+      t,
+      "caller@example.com",
+    );
+    const { authed: callee, userId: calleeId } = await createUser(
+      t,
+      "callee@example.com",
+    );
+
+    await caller.mutation(api.families.create, { name: "Two devices" });
+    const [family] = await caller.query(api.families.listMy, {});
+    await callee.mutation(api.families.join, {
+      inviteCode: family.inviteCode,
+    });
+    await callee.mutation(api.pushTokens.register, {
+      deviceId: "callee-phone",
+      platform: "android",
+      token: "phone-token",
+    });
+    await callee.mutation(api.pushTokens.register, {
+      deviceId: "callee-tablet",
+      platform: "android",
+      token: "tablet-token",
+    });
+
+    const callId = await caller.mutation(api.calls.start, {
+      calleeId,
+      deviceId: "caller-phone",
+      familyId: family._id,
+      offerSdp: "offer",
+    });
+    const incomingPayload = await t.query(
+      internal.callNotificationData.getIncomingCallPayload,
+      { callId },
+    );
+    expect(incomingPayload?.tokens).toEqual(
+      expect.arrayContaining(["phone-token", "tablet-token"]),
+    );
+    await expect(
+      caller.mutation(api.calls.end, {
+        callId,
+        deviceId: "caller-tablet",
+      }),
+    ).rejects.toThrow("This device does not own the call");
+    await expect(
+      caller.mutation(api.calls.end, { callId }),
+    ).rejects.toThrow("This device does not own the call");
+    await expect(
+      caller.mutation(api.calls.decline, { callId }),
+    ).rejects.toThrow("This device does not own the call");
+    await expect(
+      caller.mutation(api.calls.addIceCandidate, {
+        callId,
+        candidate: "unowned-caller-candidate",
+        recipientId: calleeId,
+      }),
+    ).rejects.toThrow("This device does not own the call");
+    await expect(
+      callee.mutation(api.calls.answer, {
+        answerSdp: "legacy-answer",
+        callId,
+      }),
+    ).rejects.toThrow("A device ID is required to answer this call");
+    await expect(
+      callee.mutation(api.calls.answer, {
+        answerSdp: "empty-device-answer",
+        callId,
+        deviceId: "",
+      }),
+    ).rejects.toThrow("A device ID is required to answer this call");
+
+    await caller.mutation(api.calls.addIceCandidate, {
+      callId,
+      candidate: "caller-candidate",
+      deviceId: "caller-phone",
+      recipientId: calleeId,
+    });
+    await callee.mutation(api.calls.addIceCandidate, {
+      callId,
+      candidate: "phone-candidate",
+      deviceId: "callee-phone",
+      recipientId: callerId,
+    });
+    await callee.mutation(api.calls.addIceCandidate, {
+      callId,
+      candidate: "tablet-candidate",
+      deviceId: "callee-tablet",
+      recipientId: callerId,
+    });
+
+    const ringingCaller = await caller.query(api.calls.watch, {
+      deviceId: "caller-phone",
+      familyId: family._id,
+    });
+    expect(ringingCaller.candidates).toEqual([]);
+    const ringingCallee = await callee.query(api.calls.watch, {
+      deviceId: "callee-phone",
+      familyId: family._id,
+    });
+    expect(ringingCallee.candidates).toEqual([
+      expect.objectContaining({
+        candidate: "caller-candidate",
+        senderDeviceId: "caller-phone",
+      }),
+    ]);
+
+    await callee.mutation(api.calls.answer, {
+      answerSdp: "phone-answer",
+      callId,
+      deviceId: "callee-phone",
+    });
+    await expect(
+      callee.mutation(api.calls.answer, {
+        answerSdp: "tablet-answer",
+        callId,
+        deviceId: "callee-tablet",
+      }),
+    ).rejects.toThrow("Call is no longer ringing");
+
+    const activeCaller = await caller.query(api.calls.watch, {
+      deviceId: "caller-phone",
+      familyId: family._id,
+    });
+    expect(activeCaller.call).toMatchObject({
+      answeredByDeviceId: "callee-phone",
+      callerDeviceId: "caller-phone",
+      status: "active",
+    });
+    expect(activeCaller.candidates).toEqual([
+      expect.objectContaining({
+        candidate: "phone-candidate",
+        senderDeviceId: "callee-phone",
+      }),
+    ]);
+    expect(activeCaller.candidates).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ candidate: "tablet-candidate" }),
+      ]),
+    );
+
+    const losingDevice = await callee.query(api.calls.watch, {
+      deviceId: "callee-tablet",
+      familyId: family._id,
+    });
+    expect(losingDevice.candidates).toEqual([]);
+    const unidentifiedCallee = await callee.query(api.calls.watch, {
+      familyId: family._id,
+    });
+    expect(unidentifiedCallee.candidates).toEqual([]);
+    await expect(
+      callee.mutation(api.calls.addIceCandidate, {
+        callId,
+        candidate: "late-tablet-candidate",
+        deviceId: "callee-tablet",
+        recipientId: callerId,
+      }),
+    ).rejects.toThrow("This device does not own the call");
+    await expect(
+      callee.mutation(api.calls.addIceCandidate, {
+        callId,
+        candidate: "unidentified-callee-candidate",
+        recipientId: callerId,
+      }),
+    ).rejects.toThrow("This device does not own the call");
+    await expect(
+      callee.mutation(api.calls.end, {
+        callId,
+        deviceId: "callee-tablet",
+      }),
+    ).rejects.toThrow("This device does not own the call");
+    await expect(
+      callee.mutation(api.calls.end, { callId }),
+    ).rejects.toThrow("This device does not own the call");
+    await expect(
+      caller.mutation(api.calls.end, { callId }),
+    ).rejects.toThrow("This device does not own the call");
+
+    const answeredPayload = await t.query(
+      internal.callNotificationData.getResolvedCallPayload,
+      { callId, resolution: "answered" },
+    );
+    expect(answeredPayload).toMatchObject({
+      answeredByDeviceId: "callee-phone",
+      resolution: "answered",
+      tokens: ["tablet-token"],
+    });
+
+    await callee.mutation(api.calls.end, {
+      callId,
+      deviceId: "callee-phone",
+    });
+    const endedPayload = await t.query(
+      internal.callNotificationData.getResolvedCallPayload,
+      { callId, resolution: "ended" },
+    );
+    expect(endedPayload?.tokens).toEqual(
+      expect.arrayContaining(["phone-token", "tablet-token"]),
+    );
+  });
+
+  test("rotates and unregisters push tokens per authenticated device", async () => {
+    const t = convexTest({ schema, modules });
+    const { authed: user, userId } = await createUser(
+      t,
+      "devices@example.com",
+    );
+
+    await user.mutation(api.pushTokens.register, {
+      deviceId: "phone",
+      platform: "android",
+      token: "old-phone-token",
+    });
+    await user.mutation(api.pushTokens.register, {
+      deviceId: "tablet",
+      platform: "android",
+      token: "tablet-token",
+    });
+    await user.mutation(api.pushTokens.register, {
+      deviceId: "phone",
+      platform: "android",
+      token: "new-phone-token",
+    });
+
+    const registrations = await t.run(async (ctx) => {
+      const phone = await ctx.db
+        .query("pushTokens")
+        .withIndex("by_userId_and_deviceId", (q) =>
+          q.eq("userId", userId).eq("deviceId", "phone"),
+        )
+        .take(10);
+      const tablet = await ctx.db
+        .query("pushTokens")
+        .withIndex("by_userId_and_deviceId", (q) =>
+          q.eq("userId", userId).eq("deviceId", "tablet"),
+        )
+        .take(10);
+      return { phone, tablet };
+    });
+    expect(registrations.phone).toEqual([
+      expect.objectContaining({ token: "new-phone-token" }),
+    ]);
+    expect(registrations.tablet).toEqual([
+      expect.objectContaining({ token: "tablet-token" }),
+    ]);
+
+    expect(
+      await user.mutation(api.pushTokens.unregisterDevice, {
+        deviceId: "phone",
+      }),
+    ).toBe(1);
+    const remaining = await t.run(async (ctx) =>
+      ctx.db
+        .query("pushTokens")
+        .withIndex("by_userId_and_platform", (q) =>
+          q.eq("userId", userId).eq("platform", "android"),
+        )
+        .take(10),
+    );
+    expect(remaining).toEqual([
+      expect.objectContaining({
+        deviceId: "tablet",
+        token: "tablet-token",
+      }),
+    ]);
+  });
+
+  test("targets every callee device when a ringing call is declined", async () => {
+    const t = convexTest({ schema, modules });
+    const { authed: caller } = await createUser(t, "decline-caller@example.com");
+    const { authed: callee, userId: calleeId } = await createUser(
+      t,
+      "decline-callee@example.com",
+    );
+
+    await caller.mutation(api.families.create, { name: "Decline" });
+    const [family] = await caller.query(api.families.listMy, {});
+    await callee.mutation(api.families.join, {
+      inviteCode: family.inviteCode,
+    });
+    for (const [deviceId, token] of [
+      ["phone", "decline-phone-token"],
+      ["tablet", "decline-tablet-token"],
+    ] as const) {
+      await callee.mutation(api.pushTokens.register, {
+        deviceId,
+        platform: "android",
+        token,
+      });
+    }
+
+    const callId = await caller.mutation(api.calls.start, {
+      calleeId,
+      deviceId: "caller-device",
+      familyId: family._id,
+      offerSdp: "offer",
+    });
+    await callee.mutation(api.calls.decline, {
+      callId,
+      deviceId: "phone",
+    });
+
+    const payload = await t.query(
+      internal.callNotificationData.getResolvedCallPayload,
+      { callId, resolution: "declined" },
+    );
+    expect(payload?.tokens).toEqual(
+      expect.arrayContaining([
+        "decline-phone-token",
+        "decline-tablet-token",
+      ]),
+    );
   });
 });

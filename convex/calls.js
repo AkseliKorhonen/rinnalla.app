@@ -78,7 +78,7 @@ async function deleteIceCandidates(ctx, callId) {
   }
 }
 
-async function hasBusyCall(ctx, userId, familyId) {
+async function hasBusyCall(ctx, userId) {
   const [ringingAsCaller, ringingAsCallee, activeAsCaller, activeAsCallee] =
     await Promise.all([
       ctx.db
@@ -112,11 +112,68 @@ async function hasBusyCall(ctx, userId, familyId) {
     ...ringingAsCallee,
     ...activeAsCaller,
     ...activeAsCallee,
-  ].some((call) => call.familyId === familyId);
+  ].length > 0;
+}
+
+function deviceOwnsActiveCall(call, userId, deviceId) {
+  const owningDeviceId = call.callerId === userId
+    ? call.callerDeviceId
+    : call.answeredByDeviceId;
+  return owningDeviceId === undefined || owningDeviceId === deviceId;
+}
+
+function callerDeviceOwnsRingingCall(call, userId, deviceId) {
+  return (
+    userId !== call.callerId ||
+    call.callerDeviceId === undefined ||
+    call.callerDeviceId === deviceId
+  );
+}
+
+async function getCandidatesForDevice(ctx, call, userId, deviceId) {
+  const isCaller = call.callerId === userId;
+
+  // A callee may start gathering ICE before answering, but the caller must
+  // never consume candidates until one callee device wins the answer race.
+  if (call.status === "ringing" && isCaller) return [];
+  if (
+    call.status === "active" &&
+    !deviceOwnsActiveCall(call, userId, deviceId)
+  ) {
+    return [];
+  }
+
+  const expectedSenderDeviceId = isCaller
+    ? call.answeredByDeviceId
+    : call.callerDeviceId;
+  if (expectedSenderDeviceId !== undefined) {
+    return await ctx.db
+      .query("callIceCandidates")
+      .withIndex(
+        "by_callId_and_recipientId_and_senderDeviceId",
+        (q) =>
+          q
+            .eq("callId", call._id)
+            .eq("recipientId", userId)
+            .eq("senderDeviceId", expectedSenderDeviceId),
+      )
+      .order("asc")
+      .take(100);
+  }
+
+  // Calls created during a rolling upgrade may not yet have device fields.
+  return await ctx.db
+    .query("callIceCandidates")
+    .withIndex("by_callId_and_recipientId", (q) =>
+      q.eq("callId", call._id).eq("recipientId", userId),
+    )
+    .order("asc")
+    .take(100);
 }
 
 export const watch = query({
   args: {
+    deviceId: v.optional(v.string()),
     familyId: v.id("families"),
   },
   handler: async (ctx, args) => {
@@ -153,13 +210,12 @@ export const watch = query({
     }
 
     const [callSummary] = await getCallSummaries(ctx, [currentCall]);
-    const candidates = await ctx.db
-      .query("callIceCandidates")
-      .withIndex("by_callId_and_recipientId", (q) =>
-        q.eq("callId", currentCall._id).eq("recipientId", userId),
-      )
-      .order("asc")
-      .take(100);
+    const candidates = await getCandidatesForDevice(
+      ctx,
+      currentCall,
+      userId,
+      args.deviceId,
+    );
 
     return {
       call: callSummary,
@@ -172,6 +228,7 @@ export const start = mutation({
   args: {
     familyId: v.id("families"),
     calleeId: v.id("users"),
+    deviceId: v.optional(v.string()),
     offerSdp: v.string(),
   },
   handler: async (ctx, args) => {
@@ -184,8 +241,8 @@ export const start = mutation({
     await requireFamilyMembership(ctx, args.familyId, args.calleeId);
 
     const [callerBusy, calleeBusy] = await Promise.all([
-      hasBusyCall(ctx, callerId, args.familyId),
-      hasBusyCall(ctx, args.calleeId, args.familyId),
+      hasBusyCall(ctx, callerId),
+      hasBusyCall(ctx, args.calleeId),
     ]);
     if (callerBusy || calleeBusy) {
       throw new Error("A call is already in progress");
@@ -198,6 +255,9 @@ export const start = mutation({
       status: "ringing",
       offerSdp: args.offerSdp,
       nativeCallId: createNativeCallId(),
+      ...(args.deviceId === undefined
+        ? {}
+        : { callerDeviceId: args.deviceId }),
       createdAt: Date.now(),
     });
     await ctx.scheduler.runAfter(0, internal.callNotifications.sendIncoming, { callId });
@@ -208,6 +268,7 @@ export const start = mutation({
 export const answer = mutation({
   args: {
     callId: v.id("calls"),
+    deviceId: v.optional(v.string()),
     answerSdp: v.string(),
   },
   handler: async (ctx, args) => {
@@ -220,11 +281,24 @@ export const answer = mutation({
     if (call.status !== "ringing") {
       throw new Error("Call is no longer ringing");
     }
+    if (
+      call.callerDeviceId !== undefined &&
+      (args.deviceId === undefined || args.deviceId.trim().length === 0)
+    ) {
+      throw new Error("A device ID is required to answer this call");
+    }
 
     await ctx.db.patch(call._id, {
       status: "active",
       answerSdp: args.answerSdp,
+      ...(args.deviceId === undefined
+        ? {}
+        : { answeredByDeviceId: args.deviceId }),
       answeredAt: Date.now(),
+    });
+    await ctx.scheduler.runAfter(0, internal.callNotifications.sendResolved, {
+      callId: call._id,
+      resolution: "answered",
     });
 
     return call._id;
@@ -234,6 +308,7 @@ export const answer = mutation({
 export const decline = mutation({
   args: {
     callId: v.id("calls"),
+    deviceId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUserId(ctx);
@@ -242,6 +317,9 @@ export const decline = mutation({
     if (call.status !== "ringing") {
       throw new Error("Call is no longer ringing");
     }
+    if (!callerDeviceOwnsRingingCall(call, userId, args.deviceId)) {
+      throw new Error("This device does not own the call");
+    }
 
     await ctx.db.patch(call._id, {
       status: "declined",
@@ -249,6 +327,10 @@ export const decline = mutation({
       endedBy: userId,
     });
     await deleteIceCandidates(ctx, call._id);
+    await ctx.scheduler.runAfter(0, internal.callNotifications.sendResolved, {
+      callId: call._id,
+      resolution: "declined",
+    });
 
     return call._id;
   },
@@ -257,6 +339,7 @@ export const decline = mutation({
 export const end = mutation({
   args: {
     callId: v.id("calls"),
+    deviceId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUserId(ctx);
@@ -265,6 +348,18 @@ export const end = mutation({
     if (call.status !== "ringing" && call.status !== "active") {
       return call._id;
     }
+    if (
+      call.status === "ringing" &&
+      !callerDeviceOwnsRingingCall(call, userId, args.deviceId)
+    ) {
+      throw new Error("This device does not own the call");
+    }
+    if (
+      call.status === "active" &&
+      !deviceOwnsActiveCall(call, userId, args.deviceId)
+    ) {
+      throw new Error("This device does not own the call");
+    }
 
     await ctx.db.patch(call._id, {
       status: "ended",
@@ -272,6 +367,10 @@ export const end = mutation({
       endedBy: userId,
     });
     await deleteIceCandidates(ctx, call._id);
+    await ctx.scheduler.runAfter(0, internal.callNotifications.sendResolved, {
+      callId: call._id,
+      resolution: "ended",
+    });
 
     return call._id;
   },
@@ -303,6 +402,10 @@ export const expireStale = internalMutation({
         endedAt: now,
       });
       await deleteIceCandidates(ctx, call._id);
+      await ctx.scheduler.runAfter(0, internal.callNotifications.sendResolved, {
+        callId: call._id,
+        resolution: "ended",
+      });
     }
 
     if (
@@ -320,6 +423,7 @@ export const addIceCandidate = mutation({
   args: {
     callId: v.id("calls"),
     recipientId: v.id("users"),
+    deviceId: v.optional(v.string()),
     candidate: v.string(),
     sdpMid: v.optional(v.string()),
     sdpMLineIndex: v.optional(v.number()),
@@ -337,11 +441,30 @@ export const addIceCandidate = mutation({
     if (call.status !== "ringing" && call.status !== "active") {
       throw new Error("Call is no longer active");
     }
+    if (
+      call.status === "active" &&
+      !deviceOwnsActiveCall(call, senderId, args.deviceId)
+    ) {
+      throw new Error("This device does not own the call");
+    }
+    if (
+      call.status === "ringing" &&
+      !callerDeviceOwnsRingingCall(call, senderId, args.deviceId)
+    ) {
+      throw new Error("This device does not own the call");
+    }
+
+    const senderDeviceId =
+      args.deviceId ??
+      (senderId === call.callerId
+        ? call.callerDeviceId
+        : call.answeredByDeviceId);
 
     return await ctx.db.insert("callIceCandidates", {
       callId: call._id,
       recipientId: args.recipientId,
       senderId,
+      ...(senderDeviceId === undefined ? {} : { senderDeviceId }),
       candidate: args.candidate,
       sdpMid: args.sdpMid,
       sdpMLineIndex: args.sdpMLineIndex,

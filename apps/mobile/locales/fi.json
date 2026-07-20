@@ -1,0 +1,5 @@
+{
+  "NSCameraUsageDescription": "rinnalla.app käyttää kameraa perheen videopuheluihin.",
+  "NSMicrophoneUsageDescription": "rinnalla.app käyttää mikrofonia perheen videopuheluihin.",
+  "NSPhotoLibraryUsageDescription": "Salli rinnalla.appille pääsy kuviisi, jotta voit valita profiilikuvan."
+}

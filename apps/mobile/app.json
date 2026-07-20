@@ -6,6 +6,10 @@
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "locales": {
+      "en": "./locales/en.json",
+      "fi": "./locales/fi.json"
+    },
     "plugins": [
       "expo-secure-store",
       "expo-dev-client",

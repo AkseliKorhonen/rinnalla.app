@@ -22,6 +22,7 @@ import {
   useState,
 } from "react";
 import { FamilyCallPanel } from "./family-call-panel";
+import { useLanguage } from "./language";
 import { MemberAvatar } from "./member-avatar";
 
 type Mode = "signIn" | "signUp";
@@ -37,6 +38,7 @@ const PROFILE_IMAGE_CONTENT_TYPES = new Set([
 ]);
 
 export function AuthPanel() {
+  const { language, setLanguage, t, tError } = useLanguage();
   const [mode, setMode] = useState<Mode>("signIn");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -192,19 +194,19 @@ export function AuthPanel() {
       });
 
       if (result.signingIn) {
-        setStatus(mode === "signUp" ? "Account created." : "Signed in.");
+        setStatus(t(mode === "signUp" ? "Account created." : "Signed in."));
       } else {
         setPassword("");
         setEmailVerificationCode("");
         setEmailVerificationPending(true);
-        setStatus(
+        setStatus(t(
           mode === "signUp"
             ? "Account created. Enter the verification code from your email."
             : "Enter the verification code we sent to your email.",
-        );
+        ));
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Authentication failed.");
+      setStatus(tError(error, "Authentication failed."));
     } finally {
       setSubmitting(false);
     }
@@ -226,13 +228,9 @@ export function AuthPanel() {
       }
       setEmailVerificationCode("");
       setEmailVerificationPending(false);
-      setStatus("Email verified. You are now signed in.");
+      setStatus(t("Email verified. You are now signed in."));
     } catch (error) {
-      setStatus(
-        error instanceof Error
-          ? error.message
-          : "That verification code could not be verified.",
-      );
+      setStatus(tError(error, "That verification code could not be verified."));
     } finally {
       setSubmitting(false);
     }
@@ -244,13 +242,9 @@ export function AuthPanel() {
     try {
       await signIn("password", { email, flow: "email-verification" });
       setEmailVerificationCode("");
-      setStatus("We sent a new verification code to your email.");
+      setStatus(t("We sent a new verification code to your email."));
     } catch (error) {
-      setStatus(
-        error instanceof Error
-          ? error.message
-          : "Could not send a new verification code.",
-      );
+      setStatus(tError(error, "Could not send a new verification code."));
     } finally {
       setSubmitting(false);
     }
@@ -262,9 +256,9 @@ export function AuthPanel() {
     setStatus(null);
     try {
       await updateName({ name: displayName });
-      setStatus("Your name has been updated.");
+      setStatus(t("Your name has been updated."));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not update your name.");
+      setStatus(tError(error, "Could not update your name."));
     } finally {
       setSubmitting(false);
     }
@@ -280,12 +274,12 @@ export function AuthPanel() {
     const contentType = file.type === "image/jpg" ? "image/jpeg" : file.type;
     if (!PROFILE_IMAGE_CONTENT_TYPES.has(contentType)) {
       input.value = "";
-      setStatus("Choose a JPEG, PNG, or WebP image.");
+      setStatus(t("Choose a JPEG, PNG, or WebP image."));
       return;
     }
     if (file.size > MAX_PROFILE_IMAGE_BYTES) {
       input.value = "";
-      setStatus("Profile pictures must be 5 MB or smaller.");
+      setStatus(t("Profile pictures must be 5 MB or smaller."));
       return;
     }
 
@@ -302,9 +296,9 @@ export function AuthPanel() {
       const result = await response.json() as { storageId?: Id<"_storage"> };
       if (!result.storageId) throw new Error("The upload did not return a file ID.");
       await updateProfileImage({ storageId: result.storageId });
-      setStatus("Your picture has been updated.");
+      setStatus(t("Your picture has been updated."));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not update your picture.");
+      setStatus(tError(error, "Could not update your picture."));
     } finally {
       input.value = "";
       setSubmitting(false);
@@ -316,9 +310,9 @@ export function AuthPanel() {
     setStatus(null);
     try {
       await removeProfileImage({});
-      setStatus("Your picture has been removed.");
+      setStatus(t("Your picture has been removed."));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not remove your picture.");
+      setStatus(tError(error, "Could not remove your picture."));
     } finally {
       setSubmitting(false);
     }
@@ -332,9 +326,9 @@ export function AuthPanel() {
     try {
       await signIn("password", { email, flow: "reset" });
       setResetStep("verify");
-      setStatus("If an account matches that email, we sent a reset code.");
+      setStatus(t("If an account matches that email, we sent a reset code."));
     } catch {
-      setStatus("We could not start the password reset. Please try again.");
+      setStatus(t("We could not start the password reset. Please try again."));
     } finally {
       setSubmitting(false);
     }
@@ -355,17 +349,13 @@ export function AuthPanel() {
       setPassword("");
       setResetCode("");
       setResetStep(null);
-      setStatus(
+      setStatus(t(
         result.signingIn
           ? "Password reset. You are now signed in."
           : "Password reset. You can now sign in.",
-      );
+      ));
     } catch (error) {
-      setStatus(
-        error instanceof Error
-          ? error.message
-          : "That reset code could not be verified.",
-      );
+      setStatus(tError(error, "That reset code could not be verified."));
     } finally {
       setSubmitting(false);
     }
@@ -377,9 +367,9 @@ export function AuthPanel() {
 
     try {
       await signOut();
-      setStatus("Signed out.");
+      setStatus(t("Signed out."));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Sign out failed.");
+      setStatus(tError(error, "Sign out failed."));
     } finally {
       setSubmitting(false);
     }
@@ -393,9 +383,9 @@ export function AuthPanel() {
     try {
       await createFamily({ name: familyName });
       setFamilyName("");
-      setStatus("Family created.");
+      setStatus(t("Family created."));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not create family.");
+      setStatus(tError(error, "Could not create family."));
     } finally {
       setSubmitting(false);
     }
@@ -409,9 +399,9 @@ export function AuthPanel() {
     try {
       await joinFamily({ inviteCode });
       setInviteCode("");
-      setStatus("Joined family.");
+      setStatus(t("Joined family."));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not join family.");
+      setStatus(tError(error, "Could not join family."));
     } finally {
       setSubmitting(false);
     }
@@ -426,9 +416,9 @@ export function AuthPanel() {
 
     try {
       const inviteCode = await regenerateInviteCode({ familyId: activeFamilyId });
-      setStatus(`New invite code: ${inviteCode}`);
+      setStatus(t("New invite code: {code}", { code: inviteCode }));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not rotate invite code.");
+      setStatus(tError(error, "Could not rotate invite code."));
     } finally {
       setSubmitting(false);
     }
@@ -443,9 +433,9 @@ export function AuthPanel() {
 
     try {
       await removeMember({ familyId: activeFamilyId, userId });
-      setStatus("Family member removed.");
+      setStatus(t("Family member removed."));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not remove family member.");
+      setStatus(tError(error, "Could not remove family member."));
     } finally {
       setSubmitting(false);
     }
@@ -460,9 +450,9 @@ export function AuthPanel() {
 
     try {
       await leaveFamily({ familyId: activeFamilyId });
-      setStatus("You left the family.");
+      setStatus(t("You left the family."));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not leave family.");
+      setStatus(tError(error, "Could not leave family."));
     } finally {
       setSubmitting(false);
     }
@@ -470,14 +460,29 @@ export function AuthPanel() {
 
   return (
     <div className="w-full min-w-0 max-w-7xl rounded-2xl border border-stone-800 bg-stone-900/95 p-4 shadow-2xl shadow-black/30 sm:rounded-[2rem] sm:p-6 lg:p-8">
-      <p className="text-sm uppercase tracking-[0.35em] text-amber-300">
-        rinnalla.app
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <p className="text-sm uppercase tracking-[0.35em] text-amber-300">
+          rinnalla.app
+        </p>
+        <div aria-label={t("Language")} className="flex items-center gap-1 rounded-xl border border-stone-700 p-1" role="group">
+          {(["en", "fi"] as const).map((option) => (
+            <button
+              aria-pressed={language === option}
+              className={`min-h-9 rounded-lg px-3 text-sm transition ${language === option ? "bg-amber-300 font-medium text-stone-950" : "text-stone-300 hover:bg-stone-800"}`}
+              key={option}
+              onClick={() => setLanguage(option)}
+              type="button"
+            >
+              {t(option === "en" ? "English" : "Finnish")}
+            </button>
+          ))}
+        </div>
+      </div>
       <h1 className="mt-5 text-3xl font-semibold tracking-tight text-stone-50 sm:text-4xl">
-        Stay close, even from afar.
+        {t("Stay close, even from afar.")}
       </h1>
       <p className="mt-3 text-sm leading-6 text-stone-300">
-        A simple place for families to see who is available and connect face to face.
+        {t("A simple place for families to see who is available and connect face to face.")}
       </p>
 
       <div className="mt-6 flex flex-col gap-4 rounded-2xl border border-amber-300/20 bg-amber-300/[0.06] p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -505,23 +510,23 @@ export function AuthPanel() {
           </span>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-stone-100">
-              Android development build
+              {t("Android development build")}
             </p>
             <p
               id="android-build-description"
               className="mt-1 break-words text-xs leading-5 text-stone-400"
             >
-              For testing rinnalla.app on an Android phone or tablet.
+              {t("For testing rinnalla.app on an Android phone or tablet.")}
             </p>
           </div>
         </div>
         <a
           aria-describedby="android-build-description"
-          aria-label="Download the rinnalla.app Android development APK"
+          aria-label={t("Download the rinnalla.app Android development APK")}
           className="inline-flex min-h-11 w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-amber-300 px-4 py-2.5 text-sm font-semibold text-stone-950 transition hover:bg-amber-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 sm:w-auto"
           href={ANDROID_DEVELOPMENT_APK_URL}
         >
-          Download APK
+          {t("Download APK")}
           <svg
             aria-hidden="true"
             className="size-4"
@@ -541,7 +546,7 @@ export function AuthPanel() {
       </div>
 
       <AuthLoading>
-        <p className="mt-8 text-sm text-stone-400">Checking session...</p>
+        <p className="mt-8 text-sm text-stone-400">{t("Checking session...")}</p>
       </AuthLoading>
 
       <Unauthenticated>
@@ -556,7 +561,7 @@ export function AuthPanel() {
             onClick={() => setMode("signIn")}
             type="button"
           >
-            Sign In
+            {t("Sign in")}
           </button>
           <button
             className={`min-h-11 rounded-full px-3 py-2 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 sm:px-4 ${
@@ -567,20 +572,20 @@ export function AuthPanel() {
             onClick={() => setMode("signUp")}
             type="button"
           >
-            Create Account
+            {t("Create account")}
           </button>
         </div> : null}
 
         {emailVerificationPending ? (
           <form className="mt-8 space-y-4" onSubmit={onVerifyEmail}>
             <div>
-              <h2 className="text-xl font-semibold text-stone-50">Verify your email</h2>
+              <h2 className="text-xl font-semibold text-stone-50">{t("Verify your email")}</h2>
               <p className="mt-2 text-sm leading-6 text-stone-300">
-                Enter the eight-digit code sent to <span className="break-all font-medium text-stone-100">{email}</span>. The code expires in 15 minutes.
+                {t("Enter the eight-digit code sent to {email}. The code expires in 15 minutes.", { email })}
               </p>
             </div>
             <label className="block">
-              <span className="mb-2 block text-sm text-stone-300">Verification code</span>
+              <span className="mb-2 block text-sm text-stone-300">{t("Verification code")}</span>
               <input
                 autoComplete="one-time-code"
                 autoFocus
@@ -598,7 +603,7 @@ export function AuthPanel() {
               disabled={submitting || emailVerificationCode.length !== 8}
               type="submit"
             >
-              {submitting ? "Verifying..." : "Verify email"}
+              {t(submitting ? "Verifying..." : "Verify email")}
             </button>
             <button
               className="w-full text-sm text-amber-200 underline underline-offset-4 transition hover:text-amber-100 disabled:opacity-60"
@@ -606,7 +611,7 @@ export function AuthPanel() {
               onClick={() => void onResendEmailVerification()}
               type="button"
             >
-              Send a new code
+              {t("Send a new code")}
             </button>
             <button
               className="w-full text-sm text-stone-300 underline underline-offset-4"
@@ -617,16 +622,16 @@ export function AuthPanel() {
               }}
               type="button"
             >
-              Back to sign in
+              {t("Back to sign in")}
             </button>
           </form>
         ) : resetStep === null ? <form className="mt-6 space-y-4" onSubmit={onSubmit}>
           {mode === "signUp" ? <label className="block">
-            <span className="mb-2 block text-sm text-stone-300">Your name</span>
+            <span className="mb-2 block text-sm text-stone-300">{t("Your name")}</span>
             <input autoComplete="name" className="w-full rounded-2xl border border-stone-700 bg-stone-950 px-4 py-3 text-stone-50 outline-none transition focus:border-amber-300" id="auth-name" minLength={2} name="name" onChange={(event) => setDisplayName(event.target.value)} required value={displayName} />
           </label> : null}
           <label className="block">
-            <span className="mb-2 block text-sm text-stone-300">Email</span>
+            <span className="mb-2 block text-sm text-stone-300">{t("Email")}</span>
             <input
               autoComplete="email"
               className="w-full rounded-2xl border border-stone-700 bg-stone-950 px-4 py-3 text-stone-50 outline-none transition focus:border-amber-300"
@@ -640,7 +645,7 @@ export function AuthPanel() {
           </label>
 
           <label className="block">
-            <span className="mb-2 block text-sm text-stone-300">Password</span>
+            <span className="mb-2 block text-sm text-stone-300">{t("Password")}</span>
             <input
               autoComplete={
                 mode === "signUp" ? "new-password" : "current-password"
@@ -661,11 +666,11 @@ export function AuthPanel() {
             disabled={submitting}
             type="submit"
           >
-            {submitting
+            {t(submitting
               ? "Working..."
               : mode === "signUp"
                 ? "Create account"
-                : "Sign in"}
+                : "Sign in")}
           </button>
           {mode === "signIn" ? (
             <button
@@ -676,20 +681,20 @@ export function AuthPanel() {
               }}
               type="button"
             >
-              Forgot password?
+              {t("Forgot password?")}
             </button>
           ) : null}
         </form>
         : resetStep === "request" ? (
           <form className="mt-6 space-y-4" onSubmit={onRequestPasswordReset}>
             <div>
-              <h2 className="text-xl font-semibold text-stone-50">Reset password</h2>
+              <h2 className="text-xl font-semibold text-stone-50">{t("Reset password")}</h2>
               <p className="mt-2 text-sm leading-6 text-stone-300">
-                Enter your email and we will send you a reset code.
+                {t("Enter your email and we will send you a reset code.")}
               </p>
             </div>
             <label className="block">
-              <span className="mb-2 block text-sm text-stone-300">Email</span>
+              <span className="mb-2 block text-sm text-stone-300">{t("Email")}</span>
               <input
                 autoComplete="email"
                 className="w-full rounded-2xl border border-stone-700 bg-stone-950 px-4 py-3 text-stone-50 outline-none transition focus:border-amber-300"
@@ -705,26 +710,26 @@ export function AuthPanel() {
               disabled={submitting}
               type="submit"
             >
-              {submitting ? "Sending..." : "Send reset code"}
+              {t(submitting ? "Sending..." : "Send reset code")}
             </button>
             <button
               className="w-full text-sm text-stone-300 underline underline-offset-4"
               onClick={() => setResetStep(null)}
               type="button"
             >
-              Back to sign in
+              {t("Back to sign in")}
             </button>
           </form>
         ) : (
           <form className="mt-6 space-y-4" onSubmit={onVerifyPasswordReset}>
             <div>
-              <h2 className="text-xl font-semibold text-stone-50">Enter your reset code</h2>
+              <h2 className="text-xl font-semibold text-stone-50">{t("Enter your reset code")}</h2>
               <p className="mt-2 text-sm leading-6 text-stone-300">
-                Check your email for the eight-digit code, then choose a new password.
+                {t("Check your email for the eight-digit code, then choose a new password.")}
               </p>
             </div>
             <label className="block">
-              <span className="mb-2 block text-sm text-stone-300">Reset code</span>
+              <span className="mb-2 block text-sm text-stone-300">{t("Reset code")}</span>
               <input
                 autoComplete="one-time-code"
                 className="w-full rounded-2xl border border-stone-700 bg-stone-950 px-4 py-3 text-stone-50 outline-none transition focus:border-amber-300"
@@ -736,7 +741,7 @@ export function AuthPanel() {
               />
             </label>
             <label className="block">
-              <span className="mb-2 block text-sm text-stone-300">New password</span>
+              <span className="mb-2 block text-sm text-stone-300">{t("New password")}</span>
               <input
                 autoComplete="new-password"
                 className="w-full rounded-2xl border border-stone-700 bg-stone-950 px-4 py-3 text-stone-50 outline-none transition focus:border-amber-300"
@@ -753,14 +758,14 @@ export function AuthPanel() {
               disabled={submitting}
               type="submit"
             >
-              {submitting ? "Resetting..." : "Reset password"}
+              {t(submitting ? "Resetting..." : "Reset password")}
             </button>
             <button
               className="w-full text-sm text-stone-300 underline underline-offset-4"
               onClick={() => setResetStep("request")}
               type="button"
             >
-              Send a new code
+              {t("Send a new code")}
             </button>
           </form>
         )}
@@ -779,36 +784,36 @@ export function AuthPanel() {
             <div className="flex flex-col gap-5 border-b border-stone-800 pb-6 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
                 <p className="text-sm uppercase tracking-[0.32em] text-emerald-300">
-                  Family calls
+                  {t("Family calls")}
                 </p>
                 <h2 className="mt-3 break-words text-2xl font-semibold tracking-tight text-stone-50 sm:text-3xl">
-                  {dashboard?.family.name ?? "Your household"}
+                  {dashboard?.family.name ?? t("Your household")}
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-6 text-stone-300">
-                  Call anyone in your household, whenever you need to connect.
+                  {t("Call anyone in your household, whenever you need to connect.")}
                 </p>
               </div>
               <div className="w-full min-w-0 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 sm:w-auto sm:max-w-sm">
                 <p className="text-xs uppercase tracking-[0.28em] text-emerald-200">
-                  You
+                  {t("You")}
                 </p>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <MemberAvatar
                     className="size-11"
                     image={user?.image}
-                    label={user?.name ?? user?.email ?? "Authenticated user"}
+                    label={user?.name ?? user?.email ?? t("Authenticated user")}
                   />
                   <p className="min-w-0 break-words text-base font-medium text-stone-50">
-                    {user?.name ?? user?.email ?? "Authenticated user"}
+                    {user?.name ?? user?.email ?? t("Authenticated user")}
                   </p>
                   <button
                     ref={householdPanelButtonRef}
                     aria-controls="household-settings-panel"
                     aria-expanded={householdPanelOpen}
-                    aria-label={householdPanelOpen ? "Close household settings" : "Open household settings"}
+                    aria-label={t(householdPanelOpen ? "Close household settings" : "Open household settings")}
                     className="grid size-11 shrink-0 place-items-center rounded-xl text-amber-100 transition hover:bg-emerald-400/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200"
                     onClick={() => setHouseholdPanelOpen((open) => !open)}
-                    title="Household settings"
+                    title={t("Household settings")}
                     type="button"
                   >
                     <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -822,20 +827,19 @@ export function AuthPanel() {
 
             <div className="mt-6">
               {families === undefined ? (
-                <p className="text-sm text-stone-400">Loading households...</p>
+                <p className="text-sm text-stone-400">{t("Loading households...")}</p>
               ) : families.length === 0 ? (
                 <div className="rounded-3xl border border-dashed border-stone-700 bg-stone-950/40 p-6">
                   <p className="text-lg font-semibold text-stone-50">
-                    No family connected yet
+                    {t("No family connected yet")}
                   </p>
                   <p className="mt-2 text-sm leading-6 text-stone-400">
-                    Create a household or join one with an invite code to start
-                    calling your family.
+                    {t("Create a household or join one with an invite code to start calling your family.")}
                   </p>
                 </div>
               ) : dashboard === undefined ? (
                 <p className="text-sm text-stone-400">
-                  Loading household...
+                  {t("Loading household...")}
                 </p>
               ) : (
                 <div className="space-y-5">
@@ -856,19 +860,19 @@ export function AuthPanel() {
                           <div className="flex min-w-0 flex-1 items-center gap-3">
                             <MemberAvatar
                               image={member.image}
-                              label={member.name ?? member.email ?? "Family member"}
+                              label={member.name ?? member.email ?? t("Family member")}
                             />
                             <div className="min-w-0 flex-1">
                               <p className="break-words text-lg font-semibold text-stone-50">
-                                {member.name ?? member.email ?? "Family member"}
+                                {member.name ?? member.email ?? t("Family member")}
                               </p>
                               <p className="mt-1 break-all text-sm text-stone-400">
-                                {member.email ?? "No email available"}
+                                {member.email ?? t("No email available")}
                               </p>
                             </div>
                           </div>
                           <p className="shrink-0 rounded-full border border-stone-700 px-3 py-1 text-xs uppercase tracking-[0.24em] text-stone-300">
-                            {member.role}
+                            {t(member.role)}
                           </p>
                         </div>
                         {dashboard.members.find(
@@ -882,7 +886,7 @@ export function AuthPanel() {
                             onClick={() => onRemoveMember(member.userId)}
                             type="button"
                           >
-                            Remove member
+                            {t("Remove member")}
                           </button>
                         ) : null}
                       </article>
@@ -895,7 +899,7 @@ export function AuthPanel() {
 
           {householdPanelOpen ? (
             <>
-              <button aria-label="Close household settings" className="household-backdrop-enter fixed inset-0 z-40 bg-black/65 backdrop-blur-[2px] xl:hidden" onClick={() => setHouseholdPanelOpen(false)} type="button" />
+              <button aria-label={t("Close household settings")} className="household-backdrop-enter fixed inset-0 z-40 bg-black/65 backdrop-blur-[2px] xl:hidden" onClick={() => setHouseholdPanelOpen(false)} type="button" />
               <aside
                 ref={householdPanelRef}
                 aria-labelledby="household-settings-title"
@@ -906,20 +910,20 @@ export function AuthPanel() {
                 role={householdPanelModal ? "dialog" : "region"}
               >
                 <div className="flex items-center justify-between gap-4 xl:hidden">
-                  <h2 className="text-xl font-semibold text-stone-50" id="household-settings-title">Household settings</h2>
-                  <button ref={householdPanelCloseButtonRef} aria-label="Close household settings" className="grid size-11 shrink-0 place-items-center rounded-xl border border-stone-700 text-2xl text-stone-200 transition hover:border-stone-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200" onClick={() => setHouseholdPanelOpen(false)} type="button"><span aria-hidden="true">×</span></button>
+                  <h2 className="text-xl font-semibold text-stone-50" id="household-settings-title">{t("Household settings")}</h2>
+                  <button ref={householdPanelCloseButtonRef} aria-label={t("Close household settings")} className="grid size-11 shrink-0 place-items-center rounded-xl border border-stone-700 text-2xl text-stone-200 transition hover:border-stone-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200" onClick={() => setHouseholdPanelOpen(false)} type="button"><span aria-hidden="true">×</span></button>
                 </div>
-                <button className="min-h-11 w-full rounded-2xl border border-stone-600 px-4 py-3 text-sm font-medium text-stone-100 transition hover:border-stone-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 disabled:opacity-60" disabled={submitting} onClick={onSignOut} type="button">Sign out</button>
+                <button className="min-h-11 w-full rounded-2xl border border-stone-600 px-4 py-3 text-sm font-medium text-stone-100 transition hover:border-stone-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 disabled:opacity-60" disabled={submitting} onClick={onSignOut} type="button">{t("Sign out")}</button>
             <div className="rounded-3xl border border-stone-800 bg-stone-950/70 p-5">
               <p className="text-sm uppercase tracking-[0.3em] text-stone-400">
-                Households
+                {t("Households")}
               </p>
               <div className="mt-4 space-y-3">
                 {families === undefined ? (
-                  <p className="text-sm text-stone-400">Loading families...</p>
+                  <p className="text-sm text-stone-400">{t("Loading families...")}</p>
                 ) : families.length === 0 ? (
                   <p className="text-sm text-stone-400">
-                    Create or join a household to call your family.
+                    {t("Create or join a household to call your family.")}
                   </p>
                 ) : (
                   families.map((family) => (
@@ -931,10 +935,10 @@ export function AuthPanel() {
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
                             <p className="break-words text-base font-semibold text-stone-50">{family.name}</p>
-                            <p className="mt-1 text-sm text-stone-400">Role: {family.role}</p>
+                            <p className="mt-1 text-sm text-stone-400">{t("Role: {role}", { role: t(family.role) })}</p>
                           </div>
                           <div className="shrink-0 text-right">
-                            <p className="text-xs uppercase tracking-[0.25em] text-stone-500">Invite</p>
+                            <p className="text-xs uppercase tracking-[0.25em] text-stone-500">{t("Invite")}</p>
                             <p className="mt-1 font-mono text-sm text-amber-300">{family.inviteCode}</p>
                           </div>
                         </div>
@@ -946,7 +950,7 @@ export function AuthPanel() {
                           onClick={onRegenerateInviteCode}
                           type="button"
                         >
-                          Generate new invite code
+                          {t("Generate new invite code")}
                         </button>
                       ) : family._id === activeFamilyId ? (
                         <button
@@ -955,7 +959,7 @@ export function AuthPanel() {
                           onClick={onLeaveFamily}
                           type="button"
                         >
-                          Leave family
+                          {t("Leave family")}
                         </button>
                       ) : null}
                     </article>
@@ -968,10 +972,10 @@ export function AuthPanel() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm uppercase tracking-[0.3em] text-stone-400">
-                    Setup
+                    {t("Setup")}
                   </p>
                   <h3 className="mt-2 text-xl font-semibold text-stone-50">
-                    Profile &amp; setup
+                    {t("Profile & setup")}
                   </h3>
                 </div>
               </div>
@@ -980,17 +984,17 @@ export function AuthPanel() {
                 <MemberAvatar
                   className="size-20"
                   image={user?.image}
-                  label={user?.name ?? user?.email ?? "Authenticated user"}
+                  label={user?.name ?? user?.email ?? t("Authenticated user")}
                 />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-stone-100">Your picture</p>
+                  <p className="text-sm font-medium text-stone-100">{t("Your picture")}</p>
                   <p className="mt-1 text-xs leading-5 text-stone-400">
-                    JPEG, PNG, or WebP, up to 5 MB.
+                    {t("JPEG, PNG, or WebP, up to 5 MB.")}
                   </p>
                   <input
                     ref={profileImageInputRef}
                     accept="image/jpeg,image/png,image/webp"
-                    aria-label="Choose your profile picture"
+                    aria-label={t("Choose your profile picture")}
                     className="hidden"
                     disabled={submitting}
                     onChange={onProfileImageSelected}
@@ -1003,7 +1007,7 @@ export function AuthPanel() {
                       onClick={() => profileImageInputRef.current?.click()}
                       type="button"
                     >
-                      {user?.image ? "Update picture" : "Add picture"}
+                      {t(user?.image ? "Update picture" : "Add picture")}
                     </button>
                     {user?.image ? (
                       <button
@@ -1012,7 +1016,7 @@ export function AuthPanel() {
                         onClick={() => void onRemoveProfileImage()}
                         type="button"
                       >
-                        Remove picture
+                        {t("Remove picture")}
                       </button>
                     ) : null}
                   </div>
@@ -1020,14 +1024,14 @@ export function AuthPanel() {
               </div>
 
               <form className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={onUpdateName}>
-                <input aria-label="Your name" autoComplete="name" className="min-h-11 min-w-0 rounded-xl border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-50 outline-none transition focus:border-amber-300 focus-visible:ring-2 focus-visible:ring-amber-300/30" minLength={2} onChange={(event) => setDisplayName(event.target.value)} placeholder="How should your family see you?" required value={displayName} />
-                <button className="min-h-11 rounded-xl border border-amber-300/60 px-3 py-2 text-sm text-amber-100 transition hover:border-amber-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 disabled:opacity-50" disabled={submitting} type="submit">Save name</button>
+                <input aria-label={t("Your name")} autoComplete="name" className="min-h-11 min-w-0 rounded-xl border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-50 outline-none transition focus:border-amber-300 focus-visible:ring-2 focus-visible:ring-amber-300/30" minLength={2} onChange={(event) => setDisplayName(event.target.value)} placeholder={t("How should your family see you?")} required value={displayName} />
+                <button className="min-h-11 rounded-xl border border-amber-300/60 px-3 py-2 text-sm text-amber-100 transition hover:border-amber-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 disabled:opacity-50" disabled={submitting} type="submit">{t("Save name")}</button>
               </form>
 
               <form className="space-y-3" onSubmit={onCreateFamily}>
                 <label className="block">
                   <span className="mb-2 block text-sm text-stone-300">
-                    Create a family
+                    {t("Create a family")}
                   </span>
                   <input
                     autoComplete="organization"
@@ -1035,7 +1039,7 @@ export function AuthPanel() {
                     id="family-name"
                     name="familyName"
                     onChange={(event) => setFamilyName(event.target.value)}
-                    placeholder="Korhonen family"
+                    placeholder={t("Korhonen family")}
                     required
                     value={familyName}
                   />
@@ -1045,14 +1049,14 @@ export function AuthPanel() {
                   disabled={submitting}
                   type="submit"
                 >
-                  Create family
+                  {t("Create family")}
                 </button>
               </form>
 
               <form className="space-y-3" onSubmit={onJoinFamily}>
                 <label className="block">
                   <span className="mb-2 block text-sm text-stone-300">
-                    Join with invite code
+                    {t("Join with invite code")}
                   </span>
                   <input
                     autoComplete="off"
@@ -1072,7 +1076,7 @@ export function AuthPanel() {
                   disabled={submitting}
                   type="submit"
                 >
-                  Join family
+                  {t("Join family")}
                 </button>
               </form>
             </div>

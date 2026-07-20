@@ -17,7 +17,7 @@ export default tseslint.config(
     ],
   },
   {
-    files: ["apps/mobile/**/*.{ts,tsx}"],
+    files: ["apps/mobile/**/*.{ts,tsx}", "shared/**/*.{ts,tsx}"],
     extends: [eslint.configs.recommended, ...tseslint.configs.recommended],
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },

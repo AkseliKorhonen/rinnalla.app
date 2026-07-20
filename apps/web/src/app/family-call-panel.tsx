@@ -12,6 +12,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { getOrCreateWebDeviceId } from "./web-device-identity";
+import { useLanguage } from "./language";
 import { MemberAvatar } from "./member-avatar";
 
 type Member = {
@@ -93,13 +94,6 @@ function subscribeToWebDeviceIdentity() {
   return () => undefined;
 }
 
-function getMemberLabel(member: Member | undefined) {
-  if (!member) {
-    return "Family member";
-  }
-  return member.name ?? member.email ?? "Family member";
-}
-
 function serializeDescription(description: RTCSessionDescriptionInit) {
   return JSON.stringify({
     type: description.type,
@@ -147,6 +141,7 @@ export function FamilyCallPanel({
   members,
   onCallSurfaceChange,
 }: Props) {
+  const { t, tError } = useLanguage();
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const callSurfaceRef = useRef<HTMLDivElement | null>(null);
@@ -214,6 +209,8 @@ export function FamilyCallPanel({
   const callableMembers = members.filter(
     (member) => member.userId !== currentUserId,
   );
+  const memberLabel = (member: Member | undefined) =>
+    member?.name ?? member?.email ?? t("Family member");
   const isOwnedCall = activeCall !== null && deviceId !== null
     ? isCallOwnedByDevice(
         activeCall,
@@ -397,11 +394,7 @@ export function FamilyCallPanel({
         sdpMLineIndex: event.candidate.sdpMLineIndex ?? undefined,
         usernameFragment: event.candidate.usernameFragment ?? undefined,
       }).catch((error) => {
-        setCallError(
-          error instanceof Error
-            ? error.message
-            : "Could not send network candidate.",
-        );
+        setCallError(tError(error, "Could not send network details."));
       });
     };
 
@@ -478,11 +471,9 @@ export function FamilyCallPanel({
 
     void syncCall().catch((error) => {
       if (generation !== callGenerationRef.current) return;
-      setCallError(
-        error instanceof Error ? error.message : "Could not sync call state.",
-      );
+      setCallError(tError(error, "Could not sync call state."));
     });
-  }, [activeCall, currentUserId, callState, flushCandidates, isOwnedCall]);
+  }, [activeCall, currentUserId, callState, flushCandidates, isOwnedCall, tError]);
 
   useEffect(() => {
     return () => {
@@ -492,11 +483,11 @@ export function FamilyCallPanel({
 
   const onStartCall = async (calleeId: Id<"users">) => {
     if (!deviceId) {
-      setCallError("This device is still being prepared for calls.");
+      setCallError(t("This device is still being prepared for calls."));
       return;
     }
     if (typeof window === "undefined" || !window.RTCPeerConnection) {
-      setCallError("This browser does not support video calling.");
+      setCallError(t("This browser does not support video calling."));
       return;
     }
 
@@ -524,11 +515,9 @@ export function FamilyCallPanel({
       if (generation !== callGenerationRef.current) return;
       teardownConnection(true);
       setCallError(
-        error instanceof Error
-          ? error.name === "NotFoundError"
-            ? "No camera or microphone was found. Check this device's media settings and try again."
-            : error.message
-          : "Could not start the call.",
+        error instanceof Error && error.name === "NotFoundError"
+          ? t("No camera or microphone was found. Check this device's media settings and try again.")
+          : tError(error, "Could not start the call."),
       );
     } finally {
       if (generation === callGenerationRef.current) setBusyUserId(null);
@@ -573,11 +562,9 @@ export function FamilyCallPanel({
       setCallError(
         wasAnsweredElsewhere
           ? null
-          : error instanceof Error
-            ? error.name === "NotFoundError"
-              ? "No camera or microphone was found. Check this device's media settings and try again."
-              : error.message
-            : "Could not answer the call.",
+          : error instanceof Error && error.name === "NotFoundError"
+            ? t("No camera or microphone was found. Check this device's media settings and try again.")
+            : tError(error, "Could not answer the call."),
       );
     } finally {
       if (generation === callGenerationRef.current) setBusyUserId(null);
@@ -593,9 +580,7 @@ export function FamilyCallPanel({
     try {
       await declineCall({ callId: incomingCall._id, deviceId });
     } catch (error) {
-      setCallError(
-        error instanceof Error ? error.message : "Could not decline the call.",
-      );
+      setCallError(tError(error, "Could not decline the call."));
     } finally {
       setBusyUserId(null);
     }
@@ -610,9 +595,7 @@ export function FamilyCallPanel({
     try {
       await endCall({ callId: activeCall._id, deviceId });
     } catch (error) {
-      setCallError(
-        error instanceof Error ? error.message : "Could not end the call.",
-      );
+      setCallError(tError(error, "Could not end the call."));
     } finally {
       teardownConnection(true);
       setBusyUserId(null);
@@ -632,11 +615,7 @@ export function FamilyCallPanel({
     try {
       await requestAutoAnswer({ callId: activeCall._id, deviceId });
     } catch (error) {
-      setCallError(
-        error instanceof Error
-          ? error.message
-          : "Could not request automatic answering.",
-      );
+      setCallError(tError(error, "Could not request automatic answering."));
     } finally {
       setBusyUserId(null);
     }
@@ -733,13 +712,13 @@ export function FamilyCallPanel({
     }
   };
 
-  const remoteLabel = getMemberLabel(remoteMember);
+  const remoteLabel = memberLabel(remoteMember);
   const callOnAnotherDeviceMessage =
     activeCall?.status === "active" && activeCall.calleeId === currentUserId
-      ? "Answered on another device."
+      ? t("Answered on another device.")
       : activeCall?.status === "ringing"
-        ? "This call was started on another device."
-        : "This call is active on another device.";
+        ? t("This call was started on another device.")
+        : t("This call is active on another device.");
 
   return (
     <div
@@ -754,7 +733,7 @@ export function FamilyCallPanel({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <p className="text-sm uppercase tracking-[0.3em] text-sky-200">
-            Family Calls
+            {t("Family Calls")}
           </p>
           <div className="mt-2 flex min-w-0 items-center gap-3">
             {remoteMember ? (
@@ -765,13 +744,15 @@ export function FamilyCallPanel({
               />
             ) : null}
             <h3 className="min-w-0 break-words text-xl font-semibold text-stone-50 sm:text-2xl" id="family-call-title">
-              {isIncoming ? `${remoteLabel} is calling` : isOwnedCall ? `Call with ${remoteLabel}` : "Start a face-to-face check-in"}
+              {isIncoming
+                ? t("{name} is calling", { name: remoteLabel })
+                : isOwnedCall
+                  ? t("Call with {name}", { name: remoteLabel })
+                  : t("Start a face-to-face check-in")}
             </h3>
           </div>
           <p className="call-description mt-2 max-w-2xl text-sm leading-6 text-stone-300">
-            Calls use WebRTC in the browser. Convex handles the live signaling,
-            and Cloudflare TURN can be used as the relay when direct peer
-            connections are not enough.
+            {t("Calls use WebRTC in the browser. Convex handles the live signaling, and Cloudflare TURN can be used as the relay when direct peer connections are not enough.")}
           </p>
         </div>
         {isOwnedCall ? (
@@ -782,7 +763,7 @@ export function FamilyCallPanel({
             onClick={onHangUp}
             type="button"
           >
-            Hang up
+            {t("Hang up")}
           </button>
         ) : null}
       </div>
@@ -802,7 +783,7 @@ export function FamilyCallPanel({
       {canRequestAutoAnswer ? (
         <div className="flex min-w-0 flex-col gap-3 rounded-2xl border border-sky-300/30 bg-sky-300/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm leading-6 text-sky-100">
-            No answer yet. This device allows you to connect automatically.
+            {t("No answer yet. This device allows you to connect automatically.")}
           </p>
           <button
             className="min-h-11 shrink-0 rounded-2xl bg-sky-200 px-4 py-3 text-sm font-medium text-stone-950 transition hover:bg-sky-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
@@ -810,14 +791,14 @@ export function FamilyCallPanel({
             onClick={onRequestAutoAnswer}
             type="button"
           >
-            Connect automatically
+            {t("Connect automatically")}
           </button>
         </div>
       ) : null}
 
       {automaticAnswerRequested ? (
         <p aria-live="polite" className="rounded-2xl border border-sky-300/30 bg-sky-300/10 px-4 py-3 text-sm text-sky-100">
-          Automatic answering requested. Waiting for the other device to connect…
+          {t("Automatic answering requested. Waiting for the other device to connect…")}
         </p>
       ) : null}
 
@@ -831,10 +812,10 @@ export function FamilyCallPanel({
             />
             <div className="min-w-0">
               <p className="text-sm uppercase tracking-[0.24em] text-amber-200">
-                Incoming call
+                {t("Incoming call")}
               </p>
               <p className="mt-2 break-words text-lg font-medium text-stone-50">
-                {remoteLabel} is calling you
+                {t("{name} is calling you", { name: remoteLabel })}
               </p>
             </div>
           </div>
@@ -846,7 +827,7 @@ export function FamilyCallPanel({
               onClick={onAccept}
               type="button"
             >
-              Answer
+              {t("Answer")}
             </button>
             <button
               className="min-h-11 rounded-2xl border border-stone-600 px-4 py-3 text-sm font-medium text-stone-100 transition hover:border-stone-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-200 disabled:cursor-not-allowed disabled:opacity-60"
@@ -854,7 +835,7 @@ export function FamilyCallPanel({
               onClick={onDecline}
               type="button"
             >
-              Decline
+              {t("Decline")}
             </button>
           </div>
         </div>
@@ -864,7 +845,7 @@ export function FamilyCallPanel({
         <div className="grid gap-3 sm:flex sm:flex-wrap">
           {callableMembers.length === 0 ? (
             <p className="text-sm text-stone-400">
-              Add another family member to start a call.
+              {t("Add another family member to start a call.")}
             </p>
           ) : (
             callableMembers.map((member) => (
@@ -878,9 +859,9 @@ export function FamilyCallPanel({
                 <MemberAvatar
                   className="size-8"
                   image={member.image}
-                  label={getMemberLabel(member)}
+                  label={memberLabel(member)}
                 />
-                <span>Call {getMemberLabel(member)}</span>
+                <span>{t("Call {name}", { name: memberLabel(member) })}</span>
               </button>
             ))
           )}
@@ -891,7 +872,7 @@ export function FamilyCallPanel({
         <div className="min-w-0 overflow-hidden rounded-3xl border border-stone-800 bg-stone-950">
           <div className="border-b border-stone-800 px-4 py-3">
             <p className="text-xs uppercase tracking-[0.24em] text-stone-500">
-              You
+              {t("You")}
             </p>
           </div>
           <video
@@ -905,7 +886,7 @@ export function FamilyCallPanel({
         <div className="min-w-0 overflow-hidden rounded-3xl border border-stone-800 bg-stone-950">
           <div className="border-b border-stone-800 px-4 py-3">
             <p className="text-xs uppercase tracking-[0.24em] text-stone-500">
-              {isOnCall ? remoteLabel : "Waiting for call"}
+              {isOnCall ? remoteLabel : t("Waiting for call")}
             </p>
           </div>
           <video

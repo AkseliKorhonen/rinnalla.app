@@ -15,7 +15,7 @@
     "dev:convex": "npx convex dev",
     "build:web": "npm run build --workspace web",
     "lint": "npm run lint:code && npm run lint:web",
-    "lint:code": "eslint apps/mobile convex scripts",
+    "lint:code": "eslint apps/mobile convex scripts shared",
     "lint:web": "npm run lint --workspace web",
     "doctor:mobile": "expo-doctor apps/mobile",
     "test": "vitest run",

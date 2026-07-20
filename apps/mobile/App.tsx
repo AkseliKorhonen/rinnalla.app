@@ -44,6 +44,7 @@ import { MemberAvatar } from "./member-avatar";
 import { ResponsiveDrawer } from "./responsive-drawer";
 import { useResponsiveLayout } from "./responsive-layout";
 import { uploadProfileImageFile } from "./profile-image-upload";
+import { LanguageProvider, useLanguage } from "./language";
 import { registerIncomingCallNotifications } from "./call-notifications";
 import {
   getAutoAnswerCallsEnabled,
@@ -102,10 +103,6 @@ const convex = convexUrl ? new ConvexReactClient(convexUrl) : null;
 
 type AuthScreen = "signIn" | "signUp" | "verifyEmail" | "resetRequest" | "resetVerify";
 
-function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
-}
-
 function Button({
   label,
   onPress,
@@ -136,7 +133,38 @@ function Button({
   );
 }
 
+function LanguageSelector() {
+  const { language, setLanguage, t } = useLanguage();
+  return (
+    <View accessibilityLabel={t("Language")} style={styles.languageSelector}>
+      <Text style={styles.languageLabel}>{t("Language")}</Text>
+      <View style={styles.languageOptions}>
+        {(["en", "fi"] as const).map((option) => (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: language === option }}
+            key={option}
+            onPress={() => setLanguage(option)}
+            style={({ pressed }) => [
+              styles.languageOption,
+              language === option && styles.languageOptionSelected,
+              pressed && styles.buttonPressed,
+            ]}
+          >
+            <Text style={language === option
+              ? styles.languageOptionTextSelected
+              : styles.languageOptionText}>
+              {t(option === "en" ? "English" : "Finnish")}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 function AuthPanel() {
+  const { t, tError } = useLanguage();
   const { signIn } = useAuthActions();
   const insets = useSafeAreaInsets();
   const { isCompactLandscape, isLandscape, isTablet } = useResponsiveLayout();
@@ -167,19 +195,19 @@ function AuthPanel() {
         ...(screen === "signUp" ? { name: displayName } : {}),
       });
       if (result.signingIn) {
-        setStatus(screen === "signUp" ? "Account created." : "Signed in.");
+        setStatus(t(screen === "signUp" ? "Account created." : "Signed in."));
       } else {
         setPassword("");
         setEmailVerificationCode("");
         setScreen("verifyEmail");
         setStatus(
-          screen === "signUp"
+          t(screen === "signUp"
             ? "Account created. Enter the verification code from your email."
-            : "Enter the verification code we sent to your email.",
+            : "Enter the verification code we sent to your email."),
         );
       }
     } catch (error) {
-      setStatus(getErrorMessage(error, "Authentication failed."));
+      setStatus(tError(error, "Authentication failed."));
     } finally {
       setSubmitting(false);
     }
@@ -199,9 +227,9 @@ function AuthPanel() {
         throw new Error("That verification code could not be verified.");
       }
       setEmailVerificationCode("");
-      setStatus("Email verified. You are signed in.");
+      setStatus(t("Email verified. You are signed in."));
     } catch (error) {
-      setStatus(getErrorMessage(error, "That verification code could not be verified."));
+      setStatus(tError(error, "That verification code could not be verified."));
     } finally {
       setSubmitting(false);
     }
@@ -214,9 +242,9 @@ function AuthPanel() {
     try {
       await signIn("password", { email, flow: "email-verification" });
       setEmailVerificationCode("");
-      setStatus("We sent a new verification code to your email.");
+      setStatus(t("We sent a new verification code to your email."));
     } catch (error) {
-      setStatus(getErrorMessage(error, "Could not send a new verification code."));
+      setStatus(tError(error, "Could not send a new verification code."));
     } finally {
       setSubmitting(false);
     }
@@ -230,9 +258,9 @@ function AuthPanel() {
       await signIn("password", { email, flow: "reset" });
       setPassword("");
       setScreen("resetVerify");
-      setStatus("If an account matches that email, we sent a reset code.");
+      setStatus(t("If an account matches that email, we sent a reset code."));
     } catch {
-      setStatus("We could not start the password reset. Please try again.");
+      setStatus(t("We could not start the password reset. Please try again."));
     } finally {
       setSubmitting(false);
     }
@@ -252,9 +280,9 @@ function AuthPanel() {
       setPassword("");
       setResetCode("");
       setScreen("signIn");
-      setStatus(result.signingIn ? "Password reset. You are signed in." : "Password reset. Please sign in.");
+      setStatus(t(result.signingIn ? "Password reset. You are signed in." : "Password reset. Please sign in."));
     } catch (error) {
-      setStatus(getErrorMessage(error, "That reset code could not be verified."));
+      setStatus(tError(error, "That reset code could not be verified."));
     } finally {
       setSubmitting(false);
     }
@@ -306,21 +334,22 @@ function AuthPanel() {
             ]}
           >
             <View style={styles.authIntro}>
+              <LanguageSelector />
               <Text style={styles.kicker}>RINNALLA.APP</Text>
               <Text
                 accessibilityRole="header"
                 style={[styles.title, isCompactLandscape && styles.titleCompact]}
               >
-                {isVerifyingEmail ? "Verify your email" : isReset ? "Reset your password" : "Stay close, even from afar."}
+                {t(isVerifyingEmail ? "Verify your email" : isReset ? "Reset your password" : "Stay close, even from afar.")}
               </Text>
               <Text style={styles.body}>
                 {isVerifyingEmail
-                  ? `Enter the eight-digit code sent to ${email}. The code expires in 15 minutes.`
+                  ? t("Enter the eight-digit code sent to {email}. The code expires in 15 minutes.", { email })
                   : screen === "resetVerify"
-                  ? "Enter the code from your email and choose a new password."
+                  ? t("Enter the code from your email and choose a new password.")
                   : isReset
-                    ? "Enter your email and we will send a reset code."
-                    : "A simple place for families to see who is available and connect face to face."}
+                    ? t("Enter your email and we will send a reset code.")
+                    : t("A simple place for families to see who is available and connect face to face.")}
               </Text>
             </View>
 
@@ -333,7 +362,7 @@ function AuthPanel() {
                     onPress={() => setScreen("signIn")}
                     style={[styles.segment, screen === "signIn" && styles.segmentSelected]}
                   >
-                    <Text style={screen === "signIn" ? styles.segmentSelectedText : styles.segmentText}>Sign in</Text>
+                    <Text style={screen === "signIn" ? styles.segmentSelectedText : styles.segmentText}>{t("Sign in")}</Text>
                   </Pressable>
                   <Pressable
                     accessibilityRole="tab"
@@ -341,19 +370,19 @@ function AuthPanel() {
                     onPress={() => setScreen("signUp")}
                     style={[styles.segment, screen === "signUp" && styles.segmentSelected]}
                   >
-                    <Text style={screen === "signUp" ? styles.segmentSelectedText : styles.segmentText}>Create account</Text>
+                    <Text style={screen === "signUp" ? styles.segmentSelectedText : styles.segmentText}>{t("Create account")}</Text>
                   </Pressable>
                 </View>
               ) : null}
 
               <View style={styles.form}>
                 {screen === "signUp" ? <>
-                  <Text style={styles.label}>Your name</Text>
-                  <TextInput accessibilityLabel="Your name" autoComplete="name" onChangeText={setDisplayName} placeholder="How should your family see you?" placeholderTextColor="#78716c" style={styles.input} value={displayName} />
+                  <Text style={styles.label}>{t("Your name")}</Text>
+                  <TextInput accessibilityLabel={t("Your name")} autoComplete="name" onChangeText={setDisplayName} placeholder={t("How should your family see you?")} placeholderTextColor="#78716c" style={styles.input} value={displayName} />
                 </> : null}
-                <Text style={styles.label}>Email</Text>
+                <Text style={styles.label}>{t("Email")}</Text>
                 <TextInput
-                  accessibilityLabel="Email"
+                  accessibilityLabel={t("Email")}
                   autoCapitalize="none"
                   autoComplete="email"
                   editable={!isVerifyingEmail}
@@ -367,9 +396,9 @@ function AuthPanel() {
 
                 {screen === "resetVerify" || isVerifyingEmail ? (
                   <>
-                    <Text style={styles.label}>{isVerifyingEmail ? "Verification code" : "Reset code"}</Text>
+                    <Text style={styles.label}>{t(isVerifyingEmail ? "Verification code" : "Reset code")}</Text>
                     <TextInput
-                      accessibilityLabel={isVerifyingEmail ? "Verification code" : "Reset code"}
+                      accessibilityLabel={t(isVerifyingEmail ? "Verification code" : "Reset code")}
                       autoComplete="one-time-code"
                       keyboardType="number-pad"
                       maxLength={8}
@@ -388,12 +417,12 @@ function AuthPanel() {
 
                 {screen !== "resetRequest" && !isVerifyingEmail ? (
                   <>
-                    <Text style={styles.label}>{screen === "resetVerify" ? "New password" : "Password"}</Text>
+                    <Text style={styles.label}>{t(screen === "resetVerify" ? "New password" : "Password")}</Text>
                     <TextInput
-                      accessibilityLabel={screen === "resetVerify" ? "New password" : "Password"}
+                      accessibilityLabel={t(screen === "resetVerify" ? "New password" : "Password")}
                       autoComplete={screen === "signIn" ? "current-password" : "new-password"}
                       onChangeText={setPassword}
-                      placeholder="At least 8 characters"
+                      placeholder={t("At least 8 characters")}
                       placeholderTextColor="#78716c"
                       secureTextEntry
                       style={styles.input}
@@ -404,13 +433,13 @@ function AuthPanel() {
 
                 <Button
                   disabled={submitDisabled}
-                  label={submitting ? "Working..." : screen === "signUp" ? "Create account" : isVerifyingEmail ? "Verify email" : screen === "resetRequest" ? "Send reset code" : screen === "resetVerify" ? "Reset password" : "Sign in"}
+                  label={t(submitting ? "Working..." : screen === "signUp" ? "Create account" : isVerifyingEmail ? "Verify email" : screen === "resetRequest" ? "Send reset code" : screen === "resetVerify" ? "Reset password" : "Sign in")}
                   onPress={() => void submit()}
                 />
 
-                {screen === "signIn" ? <Button label="Forgot password?" onPress={() => { setPassword(""); setScreen("resetRequest"); }} secondary /> : null}
-                {isVerifyingEmail ? <Button disabled={submitting} label="Send a new code" onPress={() => void resendEmailVerification()} secondary /> : null}
-                {isReset || isVerifyingEmail ? <Button label="Back to sign in" onPress={() => { setEmailVerificationCode(""); setResetCode(""); setScreen("signIn"); }} secondary /> : null}
+                {screen === "signIn" ? <Button label={t("Forgot password?")} onPress={() => { setPassword(""); setScreen("resetRequest"); }} secondary /> : null}
+                {isVerifyingEmail ? <Button disabled={submitting} label={t("Send a new code")} onPress={() => void resendEmailVerification()} secondary /> : null}
+                {isReset || isVerifyingEmail ? <Button label={t("Back to sign in")} onPress={() => { setEmailVerificationCode(""); setResetCode(""); setScreen("signIn"); }} secondary /> : null}
               </View>
             </View>
           </View>
@@ -430,6 +459,7 @@ function AuthPanel() {
 }
 
 function FamilyHome() {
+  const { t, tError } = useLanguage();
   const { signOut } = useAuthActions();
   const { isAuthenticated } = useConvexAuth();
   const insets = useSafeAreaInsets();
@@ -517,7 +547,7 @@ function FamilyHome() {
       })
       .catch((error) => {
         if (!cancelled) {
-          setStatus(getErrorMessage(error, "Could not prepare this device for calls."));
+          setStatus(tError(error, "Could not prepare this device for calls."));
         }
       });
     return () => { cancelled = true; };
@@ -540,7 +570,7 @@ function FamilyHome() {
       .catch((error) => {
         if (!cancelled) {
           setAutoAnswerCallsLoaded(true);
-          setStatus(getErrorMessage(error, "Could not load call settings."));
+          setStatus(tError(error, "Could not load call settings."));
         }
       });
     return () => { cancelled = true; };
@@ -566,7 +596,7 @@ function FamilyHome() {
       .catch((error) => {
         if (!cancelled) {
           setSeniorModeLoaded(true);
-          setStatus(getErrorMessage(error, "Could not load Senior mode settings."));
+          setStatus(tError(error, "Could not load Senior mode settings."));
         }
       });
     return () => { cancelled = true; };
@@ -721,7 +751,7 @@ function FamilyHome() {
         await signOut();
         signedOut = true;
       } catch (error) {
-        setStatus(getErrorMessage(error, "Could not sign out."));
+        setStatus(tError(error, "Could not sign out."));
       } finally {
         // A successful sign-out unmounts this authenticated view. If it fails,
         // allow the user to retry instead of leaving the button disabled.
@@ -754,9 +784,9 @@ function FamilyHome() {
     setStatus(null);
     try {
       await operation();
-      if (success) setStatus(success);
+      if (success) setStatus(t(success));
     } catch (error) {
-      setStatus(getErrorMessage(error, "Something went wrong."));
+      setStatus(tError(error, "Something went wrong."));
     } finally {
       setSubmitting(false);
     }
@@ -799,12 +829,12 @@ function FamilyHome() {
       await setAutoAnswerCallsEnabled(user._id, enabled);
       setStatus(
         enabled
-          ? "After 10 seconds of ringing, callers can choose automatic answering while rinnalla.app is open."
-          : "Automatic call answering is off.",
+          ? t("After 10 seconds of ringing, callers can choose automatic answering while rinnalla.app is open.")
+          : t("Automatic call answering is off."),
       );
     } catch (error) {
       setAutoAnswerCalls(previous);
-      setStatus(getErrorMessage(error, "Could not update call settings."));
+      setStatus(tError(error, "Could not update call settings."));
     } finally {
       setAutoAnswerCallsSaving(false);
     }
@@ -828,7 +858,7 @@ function FamilyHome() {
       await setSeniorModeSettings(user._id, next);
     } catch (error) {
       setSeniorModeSettingsState(previous);
-      setStatus(getErrorMessage(error, "Could not save Senior mode settings."));
+      setStatus(tError(error, "Could not save Senior mode settings."));
     } finally {
       setSeniorModeSaving(false);
     }
@@ -860,7 +890,7 @@ function FamilyHome() {
       await setSeniorModeSettings(user._id, next);
     } catch (error) {
       setSeniorModeSettingsState(previous);
-      setStatus(getErrorMessage(error, "Could not start Senior mode."));
+      setStatus(tError(error, "Could not start Senior mode."));
     } finally {
       setSeniorModeSaving(false);
     }
@@ -877,8 +907,8 @@ function FamilyHome() {
     } catch (error) {
       setSeniorModeSettingsState(previous);
       Alert.alert(
-        "Could not exit Senior mode",
-        getErrorMessage(error, "Please try again."),
+        t("Could not exit Senior mode"),
+        tError(error, "Please try again."),
       );
     } finally {
       setSeniorModeSaving(false);
@@ -887,14 +917,14 @@ function FamilyHome() {
 
   const requestSeniorModeExit = useCallback(() => {
     Alert.alert(
-      "Exit Senior mode?",
-      "This will return to all app controls on this device.",
+      t("Exit Senior mode?"),
+      t("This will return to all app controls on this device."),
       [
-        { style: "cancel", text: "Keep Senior mode" },
+        { style: "cancel", text: t("Keep Senior mode") },
         {
           onPress: () => { void exitSeniorMode(); },
           style: "destructive",
-          text: "Exit",
+          text: t("Exit"),
         },
       ],
     );
@@ -921,9 +951,9 @@ function FamilyHome() {
         updateProfileImage,
         uploadType: UploadType.BINARY_CONTENT,
       });
-      setStatus("Your picture has been updated.");
+      setStatus(t("Your picture has been updated."));
     } catch (error) {
-      setStatus(getErrorMessage(error, "Could not update your picture."));
+      setStatus(tError(error, "Could not update your picture."));
     } finally {
       setSubmitting(false);
     }
@@ -934,9 +964,9 @@ function FamilyHome() {
     setStatus(null);
     try {
       await removeProfileImage({});
-      setStatus("Your picture has been removed.");
+      setStatus(t("Your picture has been removed."));
     } catch (error) {
-      setStatus(getErrorMessage(error, "Could not remove your picture."));
+      setStatus(tError(error, "Could not remove your picture."));
     } finally {
       setSubmitting(false);
     }
@@ -980,8 +1010,8 @@ function FamilyHome() {
     setSeniorModeSettingsState(next);
     setStatus(
       familyExists
-        ? "Senior mode was stopped because none of its selected family members are available."
-        : "Senior mode was stopped because its household is no longer available.",
+        ? t("Senior mode was stopped because none of its selected family members are available.")
+        : t("Senior mode was stopped because its household is no longer available."),
     );
     void setSeniorModeSettings(user._id, next).catch(() => undefined);
   }, [
@@ -1049,19 +1079,19 @@ function FamilyHome() {
               <View style={styles.headerCopy}>
                 <Text style={styles.kicker}>RINNALLA.APP</Text>
                 <Text accessibilityRole="header" style={styles.homeTitle}>
-                  {dashboard?.family.name ?? "Your household"}
+                  {dashboard?.family.name ?? t("Your household")}
                 </Text>
                 <View style={styles.userMenuRow}>
                   <MemberAvatar
                     image={user?.image}
-                    label={user?.name ?? user?.email ?? "Authenticated user"}
+                    label={user?.name ?? user?.email ?? t("Authenticated user")}
                     size={46}
                   />
                   <Text numberOfLines={2} style={styles.userName}>
-                    {user?.name ?? user?.email ?? "Authenticated user"}
+                    {user?.name ?? user?.email ?? t("Authenticated user")}
                   </Text>
                   <Pressable
-                    accessibilityLabel="Open household settings"
+                    accessibilityLabel={t("Open household settings")}
                     accessibilityRole="button"
                     hitSlop={10}
                     onPress={() => setHouseholdMenuOpen(true)}
@@ -1076,15 +1106,15 @@ function FamilyHome() {
             {families === undefined ? (
               <View style={styles.centeredPanel}>
                 <ActivityIndicator color="#fbbf24" size="large" />
-                <Text style={styles.panelText}>Loading your households…</Text>
+                <Text style={styles.panelText}>{t("Loading your households…")}</Text>
               </View>
             ) : families.length === 0 ? (
               <View style={styles.emptyHouseholdPanel}>
-                <Text style={styles.panelTitle}>No household connected yet</Text>
+                <Text style={styles.panelTitle}>{t("No household connected yet")}</Text>
                 <Text style={styles.panelText}>
-                  Open household settings to create a family or join one with an invite code.
+                  {t("Open household settings to create a family or join one with an invite code.")}
                 </Text>
-                <Button label="Open household settings" onPress={() => setHouseholdMenuOpen(true)} />
+                <Button label={t("Open household settings")} onPress={() => setHouseholdMenuOpen(true)} />
               </View>
             ) : dashboard ? (
               <View style={[styles.dashboardGrid, isWide && styles.dashboardGridWide]}>
@@ -1092,7 +1122,7 @@ function FamilyHome() {
                   {deviceId === null ? (
                     <View style={styles.centeredPanel}>
                       <ActivityIndicator color="#fbbf24" size="large" />
-                      <Text style={styles.panelText}>Preparing secure calling on this device…</Text>
+                      <Text style={styles.panelText}>{t("Preparing secure calling on this device…")}</Text>
                     </View>
                   ) : (
                     <FamilyCallPanel
@@ -1110,11 +1140,11 @@ function FamilyHome() {
                 <View style={[styles.panel, styles.membersPanel, isWide && styles.dashboardSecondary]}>
                   <View style={styles.panelHeader}>
                     <View style={styles.panelHeaderCopy}>
-                      <Text style={styles.panelTitle}>Family members</Text>
-                      <Text style={styles.panelText}>Everyone in this household can be called.</Text>
+                      <Text style={styles.panelTitle}>{t("Family members")}</Text>
+                      <Text style={styles.panelText}>{t("Everyone in this household can be called.")}</Text>
                     </View>
                     <View style={styles.inviteBadge}>
-                      <Text style={styles.inviteLabel}>INVITE</Text>
+                      <Text style={styles.inviteLabel}>{t("INVITE")}</Text>
                       <Text selectable style={styles.inviteCode}>{dashboard.family.inviteCode}</Text>
                     </View>
                   </View>
@@ -1123,14 +1153,14 @@ function FamilyHome() {
                       <View key={member.userId} style={styles.member}>
                         <MemberAvatar
                           image={member.image}
-                          label={member.name ?? member.email ?? "Family member"}
+                          label={member.name ?? member.email ?? t("Family member")}
                           size={50}
                         />
                         <View style={styles.memberIdentity}>
-                          <Text style={styles.memberName}>{member.name ?? member.email ?? "Family member"}</Text>
-                          <Text style={styles.memberDetail}>{member.email ?? "No email available"}</Text>
+                          <Text style={styles.memberName}>{member.name ?? member.email ?? t("Family member")}</Text>
+                          <Text style={styles.memberDetail}>{member.email ?? t("No email available")}</Text>
                         </View>
-                        <Text style={styles.role}>{member.role}</Text>
+                        <Text style={styles.role}>{t(member.role)}</Text>
                       </View>
                     ))}
                   </View>
@@ -1139,7 +1169,7 @@ function FamilyHome() {
             ) : (
               <View style={styles.centeredPanel}>
                 <ActivityIndicator color="#fbbf24" size="large" />
-                <Text style={styles.panelText}>Loading this household…</Text>
+                <Text style={styles.panelText}>{t("Loading this household…")}</Text>
               </View>
             )}
           </View>
@@ -1151,14 +1181,14 @@ function FamilyHome() {
         onClose={closeHouseholdMenu}
         open={householdMenuOpen}
         status={householdMenuOpen ? status : null}
-        title="Household settings"
+        title={t("Household settings")}
       >
         <View style={styles.drawerSection}>
-          <Text style={styles.drawerKicker}>HOUSEHOLDS</Text>
+          <Text style={styles.drawerKicker}>{t("HOUSEHOLDS")}</Text>
           {families === undefined ? (
             <ActivityIndicator color="#fbbf24" />
           ) : families.length === 0 ? (
-            <Text style={styles.drawerMuted}>Create or join a household below.</Text>
+            <Text style={styles.drawerMuted}>{t("Create or join a household below.")}</Text>
           ) : (
             <View style={styles.householdList}>
               {families.map((family) => {
@@ -1180,7 +1210,7 @@ function FamilyHome() {
                   >
                     <View style={styles.householdItemCopy}>
                       <Text style={styles.householdName}>{family.name}</Text>
-                      <Text style={styles.drawerMuted}>Role: {family.role}</Text>
+                      <Text style={styles.drawerMuted}>{t("Role: {role}", { role: t(family.role) })}</Text>
                     </View>
                     <Text style={styles.householdInvite}>{family.inviteCode}</Text>
                   </Pressable>
@@ -1190,23 +1220,27 @@ function FamilyHome() {
           )}
         </View>
 
+        <View style={styles.drawerSection}>
+          <LanguageSelector />
+        </View>
+
         {dashboard ? (
           <View style={styles.drawerSection}>
-            <Text style={styles.drawerKicker}>MANAGE FAMILY ACCESS</Text>
+            <Text style={styles.drawerKicker}>{t("MANAGE FAMILY ACCESS")}</Text>
             <View style={styles.drawerInviteRow}>
-              <Text style={styles.drawerMuted}>Invite code</Text>
+              <Text style={styles.drawerMuted}>{t("Invite code")}</Text>
               <Text selectable style={styles.inviteCode}>{dashboard.family.inviteCode}</Text>
             </View>
             {dashboard.members.map((member) => (
               <View key={member.userId} style={styles.drawerMember}>
                 <MemberAvatar
                   image={member.image}
-                  label={member.name ?? member.email ?? "Family member"}
+                  label={member.name ?? member.email ?? t("Family member")}
                   size={42}
                 />
                 <View style={styles.drawerMemberCopy}>
-                  <Text style={styles.drawerMemberName}>{member.name ?? member.email ?? "Family member"}</Text>
-                  <Text style={styles.drawerMuted}>{member.role}</Text>
+                  <Text style={styles.drawerMemberName}>{member.name ?? member.email ?? t("Family member")}</Text>
+                  <Text style={styles.drawerMuted}>{t(member.role)}</Text>
                 </View>
                 {currentMember?.role === "owner" && member.userId !== dashboard.currentUserId ? (
                   <Pressable
@@ -1218,7 +1252,7 @@ function FamilyHome() {
                     )}
                     style={({ pressed }) => [styles.removeButton, pressed && styles.buttonPressed]}
                   >
-                    <Text style={styles.remove}>Remove</Text>
+                    <Text style={styles.remove}>{t("Remove")}</Text>
                   </Pressable>
                 ) : null}
               </View>
@@ -1226,17 +1260,17 @@ function FamilyHome() {
             {currentMember?.role === "owner" ? (
               <Button
                 disabled={submitting}
-                label="Generate new invite code"
+                label={t("Generate new invite code")}
                 onPress={() => void perform(async () => {
                   const code = await regenerateInviteCode({ familyId: dashboard.family._id });
-                  setStatus(`New invite code: ${code}`);
+                  setStatus(t("New invite code: {code}", { code }));
                 })}
                 secondary
               />
             ) : (
               <Button
                 disabled={submitting}
-                label="Leave family"
+                label={t("Leave family")}
                 onPress={() => void perform(
                   () => leaveFamily({ familyId: dashboard.family._id }).then(() => undefined),
                   "You left the family.",
@@ -1249,14 +1283,14 @@ function FamilyHome() {
 
         {dashboard ? (
           <View style={styles.drawerSection}>
-            <Text style={styles.drawerKicker}>SENIOR MODE</Text>
-            <Text style={styles.settingTitle}>Picture-only calling</Text>
+            <Text style={styles.drawerKicker}>{t("SENIOR MODE")}</Text>
+            <Text style={styles.settingTitle}>{t("Picture-only calling")}</Text>
             <Text style={styles.drawerMuted}>
-              Choose who appears on this device. Senior mode hides every other control, and tapping a picture starts a video call.
+              {t("Choose who appears on this device. Senior mode hides every other control, and tapping a picture starts a video call.")}
             </Text>
             {selectableSeniorMembers.length === 0 ? (
               <Text style={styles.drawerMuted}>
-                Add another person to this household before starting Senior mode.
+                {t("Add another person to this household before starting Senior mode.")}
               </Text>
             ) : (
               <View style={styles.seniorSelectionList}>
@@ -1264,10 +1298,13 @@ function FamilyHome() {
                   const selected =
                     seniorModeSettings.familyId === activeFamilyId
                     && seniorModeSettings.memberIds.includes(member.userId);
-                  const label = member.name ?? member.email ?? "Family member";
+                  const label = member.name ?? member.email ?? t("Family member");
                   return (
                     <Pressable
-                      accessibilityLabel={`${selected ? "Remove" : "Add"} ${label} ${selected ? "from" : "to"} Senior mode`}
+                      accessibilityLabel={t(
+                        selected ? "Remove {name} from Senior mode" : "Add {name} to Senior mode",
+                        { name: label },
+                      )}
                       accessibilityRole="checkbox"
                       accessibilityState={{ checked: selected }}
                       disabled={seniorModeSaving}
@@ -1298,26 +1335,26 @@ function FamilyHome() {
                 || seniorModeSettings.familyId !== activeFamilyId
                 || selectedSeniorMemberIds.length === 0
               }
-              label={seniorModeSaving ? "Saving…" : "Start Senior mode"}
+              label={t(seniorModeSaving ? "Saving…" : "Start Senior mode")}
               onPress={() => void startSeniorMode()}
             />
             <Text style={styles.seniorExitHelp}>
-              To exit later, press and hold the upper-right corner for 5 seconds, then confirm. For a stronger lock, also pin the app using the device settings.
+              {t("To exit later, press and hold the upper-right corner for 5 seconds, then confirm. For a stronger lock, also pin the app using the device settings.")}
             </Text>
           </View>
         ) : null}
 
         <View style={styles.drawerSection}>
-          <Text style={styles.drawerKicker}>CALL SETTINGS</Text>
+          <Text style={styles.drawerKicker}>{t("CALL SETTINGS")}</Text>
           <View style={styles.settingRow}>
             <View style={styles.settingCopy}>
-              <Text style={styles.settingTitle}>Answer calls automatically</Text>
+              <Text style={styles.settingTitle}>{t("Answer calls automatically")}</Text>
               <Text style={styles.drawerMuted}>
-                Ring normally for 10 seconds, then let the caller choose whether to connect automatically. This is available only while rinnalla.app is open and visible; background or locked calls still require you to answer.
+                {t("Ring normally for 10 seconds, then let the caller choose whether to connect automatically. This is available only while rinnalla.app is open and visible; background or locked calls still require you to answer.")}
               </Text>
             </View>
             <Switch
-              accessibilityLabel="Answer calls automatically while the app is open"
+              accessibilityLabel={t("Answer calls automatically while the app is open")}
               disabled={!autoAnswerCallsLoaded || autoAnswerCallsSaving}
               onValueChange={(enabled) => void changeAutoAnswerCalls(enabled)}
               thumbColor={autoAnswerCalls ? "#fef3c7" : "#d6d3d1"}
@@ -1328,45 +1365,45 @@ function FamilyHome() {
         </View>
 
         <View style={styles.drawerSection}>
-          <Text style={styles.drawerKicker}>PROFILE & SETUP</Text>
+          <Text style={styles.drawerKicker}>{t("PROFILE & SETUP")}</Text>
           <View style={styles.profileImageRow}>
             <MemberAvatar
               image={user?.image}
-              label={user?.name ?? user?.email ?? "Authenticated user"}
+              label={user?.name ?? user?.email ?? t("Authenticated user")}
               size={76}
             />
             <View style={styles.profileImageControls}>
-              <Text style={styles.settingTitle}>Your picture</Text>
-              <Text style={styles.drawerMuted}>JPEG, PNG, or WebP, up to 5 MB.</Text>
+              <Text style={styles.settingTitle}>{t("Your picture")}</Text>
+              <Text style={styles.drawerMuted}>{t("JPEG, PNG, or WebP, up to 5 MB.")}</Text>
               <Button
                 disabled={submitting}
-                label={user?.image ? "Update picture" : "Add picture"}
+                label={t(user?.image ? "Update picture" : "Add picture")}
                 onPress={() => void selectProfileImage()}
                 secondary
               />
               {user?.image ? (
                 <Button
                   disabled={submitting}
-                  label="Remove picture"
+                  label={t("Remove picture")}
                   onPress={() => void removeCurrentProfileImage()}
                   secondary
                 />
               ) : null}
             </View>
           </View>
-          <Text style={styles.label}>Your name</Text>
+          <Text style={styles.label}>{t("Your name")}</Text>
           <TextInput
-            accessibilityLabel="Your name"
+            accessibilityLabel={t("Your name")}
             autoComplete="name"
             onChangeText={setDisplayName}
-            placeholder={user?.name ?? "How should your family see you?"}
+            placeholder={user?.name ?? t("How should your family see you?")}
             placeholderTextColor="#78716c"
             style={styles.input}
             value={displayName}
           />
           <Button
             disabled={submitting || displayName.trim().length < 2}
-            label="Save your name"
+            label={t("Save your name")}
             onPress={() => void perform(
               () => updateName({ name: displayName.trim() }).then(() => { setDisplayName(""); }),
               "Your name has been updated.",
@@ -1374,28 +1411,28 @@ function FamilyHome() {
             secondary
           />
 
-          <Text style={styles.label}>Create a family</Text>
+          <Text style={styles.label}>{t("Create a family")}</Text>
           <TextInput
-            accessibilityLabel="Create a family"
+            accessibilityLabel={t("Create a family")}
             autoComplete="organization"
             onChangeText={setFamilyName}
-            placeholder="Korhonen family"
+            placeholder={t("Korhonen family")}
             placeholderTextColor="#78716c"
             style={styles.input}
             value={familyName}
           />
           <Button
             disabled={submitting || !familyName.trim()}
-            label="Create family"
+            label={t("Create family")}
             onPress={() => void perform(async () => {
               await createFamily({ name: familyName.trim() });
               setFamilyName("");
             }, "Family created.")}
           />
 
-          <Text style={styles.label}>Join with invite code</Text>
+          <Text style={styles.label}>{t("Join with invite code")}</Text>
           <TextInput
-            accessibilityLabel="Join with invite code"
+            accessibilityLabel={t("Join with invite code")}
             autoCapitalize="characters"
             autoComplete="off"
             onChangeText={(value) => setInviteCode(value.toUpperCase())}
@@ -1406,7 +1443,7 @@ function FamilyHome() {
           />
           <Button
             disabled={submitting || !inviteCode.trim()}
-            label="Join family"
+            label={t("Join family")}
             onPress={() => void perform(async () => {
               await joinFamily({ inviteCode: inviteCode.trim() });
               setInviteCode("");
@@ -1421,7 +1458,7 @@ function FamilyHome() {
           onPress={() => void signOutFromDevice()}
           style={({ pressed }) => [styles.signOutButton, pressed && styles.buttonPressed]}
         >
-          <Text style={styles.signOutText}>{submitting ? "Working…" : "Sign out"}</Text>
+          <Text style={styles.signOutText}>{t(submitting ? "Working…" : "Sign out")}</Text>
         </Pressable>
       </ResponsiveDrawer>
 
@@ -1445,6 +1482,7 @@ function AppContent() {
 }
 
 function CallLaunchPrivacyGuard() {
+  const { t } = useLanguage();
   const insets = useSafeAreaInsets();
   const shouldInitializeNativeCalling =
     Platform.OS === "android" && process.env.EXPO_PUBLIC_DIRECT_FCM_ENABLED === "true";
@@ -1485,21 +1523,22 @@ function CallLaunchPrivacyGuard() {
     >
       <ActivityIndicator color="#bae6fd" size="large" />
       <Text style={styles.callLaunchPrivacyText}>
-        {isCallLaunchVisible ? "Opening your call…" : "Starting rinnalla.app…"}
+        {t(isCallLaunchVisible ? "Opening your call…" : "Starting rinnalla.app…")}
       </Text>
     </View>
   );
 }
 
-export default function App() {
+function RootApp() {
+  const { t } = useLanguage();
   if (!convex) {
     return (
       <SafeAreaProvider>
         <SafeAreaView edges={["top", "left", "right"]} style={styles.safeArea}>
           <StatusBar style="light" />
           <View style={styles.loading}>
-            <Text accessibilityRole="header" style={styles.title}>Connect rinnalla.app</Text>
-            <Text style={styles.body}>Set EXPO_PUBLIC_CONVEX_URL in apps/mobile/.env.local.</Text>
+            <Text accessibilityRole="header" style={styles.title}>{t("Connect rinnalla.app")}</Text>
+            <Text style={styles.body}>{t("Set EXPO_PUBLIC_CONVEX_URL in apps/mobile/.env.local.")}</Text>
           </View>
           <CallLaunchPrivacyGuard />
         </SafeAreaView>
@@ -1516,6 +1555,14 @@ export default function App() {
         <CallLaunchPrivacyGuard />
       </SafeAreaView>
     </SafeAreaProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <LanguageProvider>
+      <RootApp />
+    </LanguageProvider>
   );
 }
 
@@ -1580,6 +1627,44 @@ const styles = StyleSheet.create({
   authIntro: {
     flex: 1,
     minWidth: 0,
+  },
+  languageSelector: {
+    gap: 7,
+    marginBottom: 18,
+  },
+  languageLabel: {
+    color: "#a8a29e",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 1.5,
+    textTransform: "uppercase",
+  },
+  languageOptions: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  languageOption: {
+    alignItems: "center",
+    borderColor: "#57534e",
+    borderRadius: 14,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: 14,
+  },
+  languageOptionSelected: {
+    backgroundColor: "#fbbf24",
+    borderColor: "#fbbf24",
+  },
+  languageOptionText: {
+    color: "#e7e5e4",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  languageOptionTextSelected: {
+    color: "#1c1917",
+    fontSize: 14,
+    fontWeight: "700",
   },
   authControls: {
     flex: 1,

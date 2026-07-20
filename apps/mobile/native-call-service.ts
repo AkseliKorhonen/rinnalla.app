@@ -1,5 +1,10 @@
 import RNCallKeep from "react-native-callkeep";
 import { AppState, NativeModules, Platform } from "react-native";
+import {
+  detectLanguage,
+  translate,
+  type Language,
+} from "../../shared/i18n";
 
 type NativeCall = {
   callId: string;
@@ -38,6 +43,13 @@ let initialized: Promise<void> | null = null;
 let callLaunchRequested = false;
 let lockScreenCallOwner: string | null = null;
 let orphanedNativeLaunchTimeout: ReturnType<typeof setTimeout> | null = null;
+let nativeCallLanguage = detectLanguage(
+  Intl.DateTimeFormat().resolvedOptions().locale,
+);
+
+export function setNativeCallLanguage(language: Language) {
+  nativeCallLanguage = language;
+}
 
 type CallKeepLockScreenModule = {
   disconnectResolvedIncomingCall?: (
@@ -341,15 +353,18 @@ export async function initializeNativeCallService() {
           supportsVideo: true,
         },
         android: {
-          alertTitle: "Calling permission needed",
-          alertDescription: "rinnalla.app needs calling access to show incoming calls.",
-          cancelButton: "Not now",
-          okButton: "Continue",
+          alertTitle: translate(nativeCallLanguage, "Calling permission needed"),
+          alertDescription: translate(
+            nativeCallLanguage,
+            "rinnalla.app needs calling access to show incoming calls.",
+          ),
+          cancelButton: translate(nativeCallLanguage, "Not now"),
+          okButton: translate(nativeCallLanguage, "Continue"),
           additionalPermissions: ["android.permission.RECORD_AUDIO"],
           foregroundService: {
             channelId: "rinnalla-calls",
-            channelName: "Calls in progress",
-            notificationTitle: "A call is in progress",
+            channelName: translate(nativeCallLanguage, "Calls in progress"),
+            notificationTitle: translate(nativeCallLanguage, "A call is in progress"),
           },
         },
       });

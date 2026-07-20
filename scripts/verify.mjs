@@ -101,6 +101,13 @@ function selectTasks() {
     selected.add("webLint");
     selected.add("webBuild");
   }
+  if (affectsEverything || files.some((file) => file.startsWith("shared/"))) {
+    selected.add("tests");
+    selected.add("mobileTypecheck");
+    selected.add("webTypecheck");
+    selected.add("codeLint");
+    selected.add("webLint");
+  }
 
   return [...selected].map((taskName) => allTasks[taskName]);
 }

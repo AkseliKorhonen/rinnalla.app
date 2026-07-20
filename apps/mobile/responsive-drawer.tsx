@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useResponsiveLayout } from "./responsive-layout";
+import { useLanguage } from "./language";
 
 type Props = {
   children: ReactNode;
@@ -34,6 +35,7 @@ export function ResponsiveDrawer({
   status,
   title,
 }: Props) {
+  const { t } = useLanguage();
   const { isTablet, width } = useResponsiveLayout();
   const insets = useSafeAreaInsets();
   const progress = useRef(new Animated.Value(0)).current;
@@ -90,7 +92,7 @@ export function ResponsiveDrawer({
       <View accessibilityViewIsModal style={styles.overlay}>
         <Animated.View style={[styles.backdrop, { opacity: progress }]}>
           <Pressable
-            accessibilityLabel="Close household menu"
+            accessibilityLabel={t("Close household menu")}
             accessibilityRole="button"
             onPress={onClose}
             style={StyleSheet.absoluteFill}
@@ -114,7 +116,7 @@ export function ResponsiveDrawer({
             <View style={styles.header}>
               <Text accessibilityRole="header" style={styles.title}>{title}</Text>
               <Pressable
-                accessibilityLabel="Close household menu"
+                accessibilityLabel={t("Close household menu")}
                 accessibilityRole="button"
                 hitSlop={10}
                 onPress={onClose}

@@ -1,0 +1,5 @@
+{
+  "NSCameraUsageDescription": "rinnalla.app uses the camera for family video calls.",
+  "NSMicrophoneUsageDescription": "rinnalla.app uses the microphone for family video calls.",
+  "NSPhotoLibraryUsageDescription": "Allow rinnalla.app to access your photos so you can choose a profile picture."
+}

@@ -42,6 +42,7 @@ import {
 import { MemberAvatar } from "./member-avatar";
 import { useResponsiveLayout } from "./responsive-layout";
 import { getSeniorModeLayout } from "./senior-mode-layout";
+import { useLanguage } from "./language";
 
 type Member = {
   email: string | null;
@@ -138,10 +139,6 @@ type NativeConnectionEvents = {
   ontrack: ((event: { streams: MediaStream[]; track?: RemoteTrack }) => void) | null;
 };
 
-function labelFor(member: Member | undefined) {
-  return member?.name ?? member?.email ?? "Family member";
-}
-
 function serializeDescription(description: { type?: string; sdp?: string }) {
   return JSON.stringify({ type: description.type, sdp: description.sdp ?? "" });
 }
@@ -181,6 +178,7 @@ export function FamilyCallPanel({
   onSelectFamily,
   seniorMode,
 }: Props) {
+  const { t, tError } = useLanguage();
   const insets = useSafeAreaInsets();
   const {
     height,
@@ -237,6 +235,8 @@ export function FamilyCallPanel({
   const seniorModeMembers = seniorMode
     ? callableMembers.filter((member) => seniorMode.memberIds.includes(member.userId))
     : [];
+  const memberLabel = (member: Member | undefined) =>
+    member?.name ?? member?.email ?? t("Family member");
   const isOwnedCall = activeCall
     ? isCallOwnedByDevice(
         activeCall,
@@ -417,11 +417,11 @@ export function FamilyCallPanel({
         sdpMid: event.candidate.sdpMid ?? undefined,
         sdpMLineIndex: event.candidate.sdpMLineIndex ?? undefined,
         usernameFragment: event.candidate.usernameFragment ?? undefined,
-      }).catch((candidateError) => setError(candidateError instanceof Error ? candidateError.message : "Could not send network details."));
+      }).catch((candidateError) => setError(tError(candidateError, "Could not send network details.")));
     };
     events.onconnectionstatechange = () => {
       if (connectionRef.current === connection && connection.connectionState === "failed") {
-        setError("The call connection failed. Try again.");
+        setError(t("The call connection failed. Try again."));
       }
     };
     return connection;
@@ -471,10 +471,10 @@ export function FamilyCallPanel({
           callId: call._id,
           familyId,
           nativeCallId: call.nativeCallId,
-          callerName: labelFor(members.find((member) => member.userId === call.callerId)),
+          callerName: memberLabel(members.find((member) => member.userId === call.callerId)),
         }).catch(() => undefined);
       }
-      setError(callError instanceof Error ? callError.message : "Could not decline the call.");
+      setError(tError(callError, "Could not decline the call."));
     }
     finally { setBusy(false); }
   };
@@ -505,7 +505,7 @@ export function FamilyCallPanel({
     };
     const queuedSync = syncQueueRef.current.catch(() => undefined).then(sync);
     syncQueueRef.current = queuedSync;
-    void queuedSync.catch((syncError) => setError(syncError instanceof Error ? syncError.message : "Could not sync call state."));
+    void queuedSync.catch((syncError) => setError(tError(syncError, "Could not sync call state.")));
   }, [activeCall, callState, currentUserId, isOwnedCall]);
 
   useEffect(() => () => teardown(), []);
@@ -533,7 +533,7 @@ export function FamilyCallPanel({
       await flushPendingCandidates();
     } catch (callError) {
       if (generation !== callGenerationRef.current) return;
-      teardown(); setError(callError instanceof Error ? callError.message : "Could not start the call.");
+      teardown(); setError(tError(callError, "Could not start the call."));
     } finally {
       if (generation === callGenerationRef.current) setBusy(false);
     }
@@ -607,15 +607,15 @@ export function FamilyCallPanel({
           callId: call._id,
           familyId,
           nativeCallId: call.nativeCallId,
-          callerName: labelFor(members.find((member) => member.userId === call.callerId)),
+          callerName: memberLabel(members.find((member) => member.userId === call.callerId)),
         }).catch(() => undefined);
       }
       setError(
         wasAnsweredElsewhere
           ? null
           : callError instanceof Error
-            ? callError.message
-            : "Could not answer the call.",
+            ? tError(callError, "Could not answer the call.")
+            : t("Could not answer the call."),
       );
     } finally {
       if (acceptingCallIdRef.current === call._id) acceptingCallIdRef.current = null;
@@ -658,9 +658,7 @@ export function FamilyCallPanel({
           );
         })
         .catch((offerError) => {
-          setError(offerError instanceof Error
-            ? offerError.message
-            : "Could not make automatic answering available.");
+          setError(tError(offerError, "Could not make automatic answering available."));
         });
     }, AUTO_ANSWER_DELAY_MS);
 
@@ -735,7 +733,7 @@ export function FamilyCallPanel({
 
   useEffect(() => {
     void initializeNativeCallService().catch((setupError) => {
-      setError(setupError instanceof Error ? setupError.message : "Could not set up native calling.");
+      setError(tError(setupError, "Could not set up native calling."));
     });
 
     return setNativeCallHandlers({
@@ -819,11 +817,11 @@ export function FamilyCallPanel({
     }
 
     nativeCallIdRef.current = incomingNativeCallId;
-    const callerName = labelFor(remoteMember);
+    const callerName = memberLabel(remoteMember);
     if (activeCall.status === "ringing") {
       resolvedNativeCallIdRef.current = null;
       void showIncomingCall({ callId: activeCall._id, familyId, nativeCallId: incomingNativeCallId, callerName })
-        .catch((callError) => setError(callError instanceof Error ? callError.message : "Could not alert you to the incoming call."));
+        .catch((callError) => setError(tError(callError, "Could not alert you to the incoming call.")));
     } else if (activeCall.status === "active") {
       if (isOwnedCall) {
         resolvedNativeCallIdRef.current = null;
@@ -850,9 +848,7 @@ export function FamilyCallPanel({
     try {
       await requestAutoAnswer({ callId: activeCall._id, deviceId });
     } catch (requestError) {
-      setError(requestError instanceof Error
-        ? requestError.message
-        : "Could not request automatic answering.");
+      setError(tError(requestError, "Could not request automatic answering."));
     } finally {
       setBusy(false);
     }
@@ -869,7 +865,7 @@ export function FamilyCallPanel({
       )
     ) return;
     setBusy(true); setError(null);
-    try { await endCall({ callId: call._id, deviceId }); } catch (callError) { setError(callError instanceof Error ? callError.message : "Could not end the call."); }
+    try { await endCall({ callId: call._id, deviceId }); } catch (callError) { setError(tError(callError, "Could not end the call.")); }
     finally { teardown(); setBusy(false); }
   };
 
@@ -898,10 +894,10 @@ export function FamilyCallPanel({
   const isShowingIncomingPrompt = incomingCall !== null && answeringCallId === null;
   const callOnAnotherDeviceMessage =
     activeCall?.status === "active" && activeCall.calleeId === currentUserId
-      ? "Answered on another device."
+      ? t("Answered on another device.")
       : activeCall?.status === "ringing"
-        ? "This call was started on another device."
-        : "This call is active on another device.";
+        ? t("This call was started on another device.")
+        : t("This call is active on another device.");
 
   const localPreviewWidth = isTablet
     ? (isLandscape ? 210 : 168)
@@ -976,18 +972,18 @@ export function FamilyCallPanel({
             <View style={[styles.callPrompt, isCompactLandscape && styles.callPromptCompact]}>
               <MemberAvatar
                 image={remoteMember?.image}
-                label={labelFor(remoteMember)}
+                label={memberLabel(remoteMember)}
                 size={isCompactLandscape ? 64 : 88}
               />
-              <Text style={styles.callPromptKicker}>INCOMING FAMILY CALL</Text>
+              <Text style={styles.callPromptKicker}>{t("INCOMING FAMILY CALL")}</Text>
               <Text accessibilityRole="header" style={[styles.callPromptTitle, isCompactLandscape && styles.callPromptTitleCompact]}>
-                {labelFor(remoteMember)} is calling
+                {t("{name} is calling", { name: memberLabel(remoteMember) })}
               </Text>
-              <Text style={styles.callPromptText}>Answer to start your private video call.</Text>
+              <Text style={styles.callPromptText}>{t("Answer to start your private video call.")}</Text>
               {error ? <Text accessibilityLiveRegion="assertive" style={styles.callModalErrorText}>{error}</Text> : null}
               <View style={styles.callPromptActions}>
-                <Action label="Answer" onPress={() => void acceptCall()} disabled={busy} />
-                <Action label="Decline" onPress={() => void declineIncomingCall()} disabled={busy} secondary />
+                <Action label={t("Answer")} onPress={() => void acceptCall()} disabled={busy} />
+                <Action label={t("Decline")} onPress={() => void declineIncomingCall()} disabled={busy} secondary />
               </View>
               {busy ? <ActivityIndicator color="#bae6fd" /> : null}
             </View>
@@ -1009,26 +1005,26 @@ export function FamilyCallPanel({
           >
             <MemberAvatar
               image={remoteMember?.image}
-              label={labelFor(remoteMember)}
+              label={memberLabel(remoteMember)}
               size={72}
             />
             <ActivityIndicator color="#bae6fd" size="large" />
-            <Text style={styles.waiting}>Connecting video to {labelFor(remoteMember)}…</Text>
+            <Text style={styles.waiting}>{t("Connecting video to {name}…", { name: memberLabel(remoteMember) })}</Text>
             {canRequestAutoAnswer ? (
               <View style={styles.autoAnswerAction}>
                 <Text style={styles.autoAnswerText}>
-                  No answer yet. This device allows you to connect automatically.
+                  {t("No answer yet. This device allows you to connect automatically.")}
                 </Text>
                 <Action
                   disabled={busy}
-                  label="Connect automatically"
+                  label={t("Connect automatically")}
                   onPress={() => void askForAutomaticAnswer()}
                 />
               </View>
             ) : null}
             {automaticAnswerRequested ? (
               <Text accessibilityLiveRegion="polite" style={styles.autoAnswerText}>
-                Automatic answering requested. Waiting for the other device to connect…
+                {t("Automatic answering requested. Waiting for the other device to connect…")}
               </Text>
             ) : null}
             {error ? <Text accessibilityLiveRegion="assertive" style={styles.callModalErrorText}>{error}</Text> : null}
@@ -1078,7 +1074,7 @@ export function FamilyCallPanel({
             ]}
           >
             <View style={styles.fullScreenControlInner}>
-              <Action danger disabled={busy} label="End call" onPress={() => void hangUp()} />
+              <Action danger disabled={busy} label={t("End call")} onPress={() => void hangUp()} />
             </View>
           </View>
         ) : null}
@@ -1102,11 +1098,11 @@ export function FamilyCallPanel({
       >
         <View style={styles.seniorGrid}>
           {seniorModeMembers.map((member) => {
-            const label = labelFor(member);
+            const label = memberLabel(member);
             return (
               <Pressable
-                accessibilityHint="Starts a video call"
-                accessibilityLabel={`Call ${label}`}
+                accessibilityHint={t("Starts a video call")}
+                accessibilityLabel={t("Call {name}", { name: label })}
                 accessibilityRole="button"
                 disabled={busy || activeCall !== null}
                 key={member.userId}
@@ -1139,8 +1135,8 @@ export function FamilyCallPanel({
         {busy ? <ActivityIndicator color="#fbbf24" size="large" /> : null}
       </ScrollView>
       <Pressable
-        accessibilityHint="Keep holding, then confirm, to return to the regular app"
-        accessibilityLabel="Exit Senior mode"
+        accessibilityHint={t("Keep holding, then confirm, to return to the regular app")}
+        accessibilityLabel={t("Exit Senior mode")}
         accessibilityRole="button"
         delayLongPress={5_000}
         onLongPress={seniorMode.onExitRequest}
@@ -1155,33 +1151,33 @@ export function FamilyCallPanel({
     </View>
   ) : (
     <View style={[styles.panel, isCompactLandscape && styles.panelCompact]}>
-      <Text style={styles.kicker}>FAMILY CALLS</Text>
-      <Text style={styles.title}>{isCallOnAnotherDevice ? "Call in progress" : activeCall ? `Calling ${labelFor(remoteMember)}` : "Face-to-face check-ins"}</Text>
+      <Text style={styles.kicker}>{t("FAMILY CALLS")}</Text>
+      <Text style={styles.title}>{isCallOnAnotherDevice ? t("Call in progress") : activeCall ? t("Calling {name}", { name: memberLabel(remoteMember) }) : t("Face-to-face check-ins")}</Text>
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {isCallOnAnotherDevice ? <View style={styles.resolvedElsewhere}><Text style={styles.resolvedElsewhereText}>{callOnAnotherDeviceMessage}</Text></View> : activeCall && isOwnedCall && !isConnected ? <>
         <View style={[styles.videoGrid, { height: embeddedVideoHeight }]}>
-          <View style={styles.video}>{remoteStream ? <RTCView mirror={false} objectFit="cover" streamURL={remoteStream.toURL()} style={styles.rtcView} zOrder={0} /> : <Text style={styles.waiting}>Waiting for {labelFor(remoteMember)}…</Text>}</View>
+          <View style={styles.video}>{remoteStream ? <RTCView mirror={false} objectFit="cover" streamURL={remoteStream.toURL()} style={styles.rtcView} zOrder={0} /> : <Text style={styles.waiting}>{t("Waiting for {name}…", { name: memberLabel(remoteMember) })}</Text>}</View>
           <View style={styles.localVideo}>{localStream ? <RTCView mirror objectFit="cover" streamURL={localStream.toURL()} style={styles.rtcView} zOrder={1} /> : null}</View>
         </View>
         {canRequestAutoAnswer ? (
           <View style={styles.autoAnswerAction}>
             <Text style={styles.autoAnswerText}>
-              No answer yet. This device allows you to connect automatically.
+              {t("No answer yet. This device allows you to connect automatically.")}
             </Text>
             <Action
               disabled={busy}
-              label="Connect automatically"
+              label={t("Connect automatically")}
               onPress={() => void askForAutomaticAnswer()}
             />
           </View>
         ) : null}
         {automaticAnswerRequested ? (
           <Text accessibilityLiveRegion="polite" style={styles.autoAnswerText}>
-            Automatic answering requested. Waiting for the other device to connect…
+            {t("Automatic answering requested. Waiting for the other device to connect…")}
           </Text>
         ) : null}
-        <Action label="Hang up" onPress={() => void hangUp()} disabled={busy} danger />
-      </> : !incomingCall ? <View style={styles.members}>{callableMembers.length === 0 ? <Text style={styles.waiting}>Add another family member to start a call.</Text> : callableMembers.map((member) => <Action avatar={{ image: member.image, label: labelFor(member) }} key={member.userId} label={`Call ${labelFor(member)}`} onPress={() => void beginCall(member.userId)} disabled={busy} />)}</View> : null}
+        <Action label={t("Hang up")} onPress={() => void hangUp()} disabled={busy} danger />
+      </> : !incomingCall ? <View style={styles.members}>{callableMembers.length === 0 ? <Text style={styles.waiting}>{t("Add another family member to start a call.")}</Text> : callableMembers.map((member) => <Action avatar={{ image: member.image, label: memberLabel(member) }} key={member.userId} label={t("Call {name}", { name: memberLabel(member) })} onPress={() => void beginCall(member.userId)} disabled={busy} />)}</View> : null}
       {busy ? <ActivityIndicator color="#bae6fd" style={styles.spinner} /> : null}
     </View>
   )}

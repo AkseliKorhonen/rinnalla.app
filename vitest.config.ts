@@ -7,6 +7,7 @@ export default defineConfig({
       "convex/**/*.test.ts",
       "apps/mobile/**/*.test.ts",
       "apps/web/src/**/*.test.tsx",
+      "shared/**/*.test.ts",
     ],
   },
 });

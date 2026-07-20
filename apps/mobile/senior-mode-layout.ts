@@ -4,6 +4,7 @@ type SeniorModeLayoutInput = {
   isLandscape: boolean;
   isTablet: boolean;
   memberCount: number;
+  reservedVerticalSpace?: number;
   width: number;
 };
 
@@ -15,6 +16,7 @@ export function getSeniorModeLayout({
   isLandscape,
   isTablet,
   memberCount,
+  reservedVerticalSpace = 0,
   width,
 }: SeniorModeLayoutInput) {
   const maximumColumns = isLandscape ? (isTablet ? 3 : 2) : (isTablet ? 2 : 1);
@@ -23,9 +25,10 @@ export function getSeniorModeLayout({
     - horizontalPadding
     - Math.max(0, columns - 1) * GRID_GAP;
   const tileWidth = Math.max(180, Math.floor(availableWidth / columns));
+  const availableHeight = Math.max(0, height - reservedVerticalSpace);
   const avatarSize = Math.max(
     132,
-    Math.min(tileWidth - 32, isLandscape ? height * 0.46 : 260),
+    Math.min(tileWidth - 32, isLandscape ? availableHeight * 0.46 : 260),
   );
 
   return { avatarSize, columns, gap: GRID_GAP, tileWidth };

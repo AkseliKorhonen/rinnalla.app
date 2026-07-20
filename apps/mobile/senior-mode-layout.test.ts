@@ -58,4 +58,19 @@ describe("Senior mode responsive layout", () => {
       layout.tileWidth * layout.columns + layout.gap * (layout.columns - 1),
     ).toBeLessThanOrEqual(width - 48);
   });
+
+  test("reserves room for the clock on a landscape phone", () => {
+    const layout = getSeniorModeLayout({
+      height: 390,
+      horizontalPadding: 48,
+      isLandscape: true,
+      isTablet: false,
+      memberCount: 2,
+      reservedVerticalSpace: 140,
+      width: 844,
+    });
+
+    expect(layout.columns).toBe(2);
+    expect(layout.avatarSize).toBe(132);
+  });
 });

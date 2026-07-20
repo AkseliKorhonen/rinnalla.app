@@ -42,6 +42,7 @@ import {
 import { MemberAvatar } from "./member-avatar";
 import { useResponsiveLayout } from "./responsive-layout";
 import { getSeniorModeLayout } from "./senior-mode-layout";
+import { SeniorClock } from "./senior-clock";
 import { useLanguage } from "./language";
 
 type Member = {
@@ -917,6 +918,7 @@ export function FamilyCallPanel({
     isLandscape,
     isTablet,
     memberCount: seniorModeMembers.length,
+    reservedVerticalSpace: isCompactLandscape ? 140 : isTablet ? 180 : 160,
     width,
   });
 
@@ -1088,14 +1090,21 @@ export function FamilyCallPanel({
           styles.seniorContent,
           {
             minHeight: height,
-            paddingBottom: Math.max(insets.bottom + 24, 32),
+            paddingBottom: Math.max(
+              insets.bottom + (isCompactLandscape ? 12 : 24),
+              isCompactLandscape ? 18 : 32,
+            ),
             paddingLeft: Math.max(insets.left + 20, 24),
             paddingRight: Math.max(insets.right + 20, 24),
-            paddingTop: Math.max(insets.top + 24, 32),
+            paddingTop: Math.max(
+              insets.top + (isCompactLandscape ? 12 : 24),
+              isCompactLandscape ? 18 : 32,
+            ),
           },
         ]}
         showsVerticalScrollIndicator={false}
       >
+        <SeniorClock compact={isCompactLandscape} tablet={isTablet} />
         <View style={styles.seniorGrid}>
           {seniorModeMembers.map((member) => {
             const label = memberLabel(member);

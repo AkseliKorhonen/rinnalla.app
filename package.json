@@ -62,7 +62,7 @@
     "convex-test": "^0.0.54",
     "eslint": "^9.39.5",
     "expo-doctor": "1.20.1",
-    "globals": "^16.5.0",
+    "globals": "^17.7.0",
     "next": "^16.2.10",
     "patch-package": "^8.0.1",
     "react": "19.2.3",

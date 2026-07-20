@@ -55,6 +55,9 @@ Successful output stays compact; complete logs are written under `.dev/logs/`.
 For Android build, installation, and smoke-test commands, see
 [DEVELOPMENT.md](./DEVELOPMENT.md).
 
+For the device-local, picture-only calling experience and operating-system
+pinning instructions, see [Senior mode](./docs/SENIOR_MODE.md).
+
 Before a public release, work through the
 [product readiness checklist](./docs/PRODUCT_READINESS.md).
 

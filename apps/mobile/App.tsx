@@ -7,6 +7,8 @@ import * as SecureStore from "expo-secure-store";
 import { StatusBar } from "expo-status-bar";
 import {
   ActivityIndicator,
+  Alert,
+  BackHandler,
   Keyboard,
   KeyboardAvoidingView,
   Pressable,
@@ -55,6 +57,16 @@ import {
   initializeNativeCallService,
   subscribeToCallAppLockScreenVisibility,
 } from "./native-call-service";
+import {
+  DEFAULT_SENIOR_MODE_SETTINGS,
+  availableSeniorModeMembers,
+  toggleSeniorModeMember,
+  type SeniorModeSettings,
+} from "./senior-mode-settings";
+import {
+  getSeniorModeSettings,
+  setSeniorModeSettings,
+} from "./senior-mode-storage";
 
 const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL;
 const REGISTRATION_CLEANUP_TIMEOUT_MS = 3_000;
@@ -437,16 +449,29 @@ function FamilyHome() {
   const [autoAnswerCalls, setAutoAnswerCalls] = useState(false);
   const [autoAnswerCallsLoaded, setAutoAnswerCallsLoaded] = useState(false);
   const [autoAnswerCallsSaving, setAutoAnswerCallsSaving] = useState(false);
+  const [seniorModeSettings, setSeniorModeSettingsState] =
+    useState<SeniorModeSettings>({ ...DEFAULT_SENIOR_MODE_SETTINGS });
+  const [seniorModeLoaded, setSeniorModeLoaded] = useState(false);
+  const [seniorModeSaving, setSeniorModeSaving] = useState(false);
+  const [callFamilyId, setCallFamilyId] = useState<Id<"families"> | null>(null);
   const [notificationRegistrationEpoch, setNotificationRegistrationEpoch] = useState(0);
   const activeNotificationListenersRef = useRef(new Set<() => void>());
   const notificationRegistrationsRef = useRef(new Set<Promise<() => void>>());
   const pushTokenRegistrationsRef = useRef(new Set<Promise<unknown>>());
+  const callSurfaceVisibleRef = useRef(false);
+  const callFamilyResetTimeoutRef =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
   const signingOutRef = useRef(false);
   const mountedRef = useRef(true);
 
   useEffect(() => {
     mountedRef.current = true;
-    return () => { mountedRef.current = false; };
+    return () => {
+      mountedRef.current = false;
+      if (callFamilyResetTimeoutRef.current) {
+        clearTimeout(callFamilyResetTimeoutRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -521,15 +546,56 @@ function FamilyHome() {
     return () => { cancelled = true; };
   }, [user?._id]);
 
-  const activeFamilyId = families?.some((family) => family._id === selectedFamilyId)
-    ? selectedFamilyId
-    : families?.[0]?._id ?? null;
+  useEffect(() => {
+    const userId = user?._id;
+    let cancelled = false;
+    setSeniorModeSettingsState({ ...DEFAULT_SENIOR_MODE_SETTINGS });
+    setSeniorModeLoaded(false);
+    if (!userId) return () => { cancelled = true; };
+
+    void getSeniorModeSettings(userId)
+      .then((settings) => {
+        if (!cancelled) {
+          setSeniorModeSettingsState(settings);
+          if (settings.familyId) {
+            setSelectedFamilyId(settings.familyId as Id<"families">);
+          }
+          setSeniorModeLoaded(true);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setSeniorModeLoaded(true);
+          setStatus(getErrorMessage(error, "Could not load Senior mode settings."));
+        }
+      });
+    return () => { cancelled = true; };
+  }, [user?._id]);
+
+  const configuredSeniorFamilyId =
+    seniorModeSettings.enabled
+    && families?.some((family) => family._id === seniorModeSettings.familyId)
+      ? seniorModeSettings.familyId as Id<"families">
+      : null;
+  const activeFamilyId = families?.some((family) => family._id === callFamilyId)
+    ? callFamilyId
+    : configuredSeniorFamilyId
+      ?? (families?.some((family) => family._id === selectedFamilyId)
+        ? selectedFamilyId
+        : families?.[0]?._id ?? null);
   const selectFamilyForIncomingCall = useCallback((familyId?: string) => {
     if (!familyId) return;
+    if (callFamilyResetTimeoutRef.current) {
+      clearTimeout(callFamilyResetTimeoutRef.current);
+    }
+    callFamilyResetTimeoutRef.current = setTimeout(() => {
+      callFamilyResetTimeoutRef.current = null;
+      if (!callSurfaceVisibleRef.current) setCallFamilyId(null);
+    }, 15_000);
     const family = families?.find((candidate) => candidate._id === familyId);
     if (family) {
       setPendingIncomingFamilyId(null);
-      setSelectedFamilyId(family._id);
+      setCallFamilyId(family._id);
     } else {
       setPendingIncomingFamilyId(familyId);
     }
@@ -539,7 +605,7 @@ function FamilyHome() {
     if (!pendingIncomingFamilyId || families === undefined) return;
     const family = families.find((candidate) => candidate._id === pendingIncomingFamilyId);
     setPendingIncomingFamilyId(null);
-    if (family) setSelectedFamilyId(family._id);
+    if (family) setCallFamilyId(family._id);
   }, [families, pendingIncomingFamilyId]);
   const dashboard = useQuery(api.families.dashboard, activeFamilyId ? { familyId: activeFamilyId } : "skip");
 
@@ -702,9 +768,26 @@ function FamilyHome() {
   }, []);
 
   const handleCallSurfaceChange = useCallback((visible: boolean) => {
+    if (visible && callFamilyResetTimeoutRef.current) {
+      clearTimeout(callFamilyResetTimeoutRef.current);
+      callFamilyResetTimeoutRef.current = null;
+    }
+    if (!visible && callSurfaceVisibleRef.current) {
+      setCallFamilyId(null);
+    }
+    callSurfaceVisibleRef.current = visible;
     setCallSurfaceVisible(visible);
     if (visible) closeHouseholdMenu();
   }, [closeHouseholdMenu]);
+
+  useEffect(() => {
+    if (!seniorModeSettings.enabled) return;
+    const subscription = BackHandler.addEventListener(
+      "hardwareBackPress",
+      () => true,
+    );
+    return () => subscription.remove();
+  }, [seniorModeSettings.enabled]);
 
   const changeAutoAnswerCalls = async (enabled: boolean) => {
     if (!user?._id || autoAnswerCallsSaving) return;
@@ -726,6 +809,96 @@ function FamilyHome() {
       setAutoAnswerCallsSaving(false);
     }
   };
+
+  const changeSeniorModeMember = async (memberId: Id<"users">) => {
+    if (!user?._id || !activeFamilyId || seniorModeSaving) return;
+    const previous = seniorModeSettings;
+    const currentMemberIds = previous.familyId === activeFamilyId
+      ? previous.memberIds
+      : [];
+    const next: SeniorModeSettings = {
+      enabled: false,
+      familyId: activeFamilyId,
+      memberIds: toggleSeniorModeMember(currentMemberIds, memberId),
+    };
+    setSeniorModeSettingsState(next);
+    setSeniorModeSaving(true);
+    setStatus(null);
+    try {
+      await setSeniorModeSettings(user._id, next);
+    } catch (error) {
+      setSeniorModeSettingsState(previous);
+      setStatus(getErrorMessage(error, "Could not save Senior mode settings."));
+    } finally {
+      setSeniorModeSaving(false);
+    }
+  };
+
+  const startSeniorMode = async () => {
+    if (!user?._id || !activeFamilyId || !dashboard || seniorModeSaving) return;
+    const selectedMemberIds = availableSeniorModeMembers(
+      seniorModeSettings,
+      activeFamilyId,
+      dashboard.members
+        .filter((member) => member.userId !== dashboard.currentUserId)
+        .map((member) => member.userId),
+    );
+    if (selectedMemberIds.length === 0) return;
+
+    const previous = seniorModeSettings;
+    const next: SeniorModeSettings = {
+      enabled: true,
+      familyId: activeFamilyId,
+      memberIds: selectedMemberIds,
+    };
+    setSeniorModeSettingsState(next);
+    setSelectedFamilyId(activeFamilyId);
+    setHouseholdMenuOpen(false);
+    setSeniorModeSaving(true);
+    setStatus(null);
+    try {
+      await setSeniorModeSettings(user._id, next);
+    } catch (error) {
+      setSeniorModeSettingsState(previous);
+      setStatus(getErrorMessage(error, "Could not start Senior mode."));
+    } finally {
+      setSeniorModeSaving(false);
+    }
+  };
+
+  const exitSeniorMode = async () => {
+    if (!user?._id || seniorModeSaving) return;
+    const previous = seniorModeSettings;
+    const next = { ...previous, enabled: false };
+    setSeniorModeSettingsState(next);
+    setSeniorModeSaving(true);
+    try {
+      await setSeniorModeSettings(user._id, next);
+    } catch (error) {
+      setSeniorModeSettingsState(previous);
+      Alert.alert(
+        "Could not exit Senior mode",
+        getErrorMessage(error, "Please try again."),
+      );
+    } finally {
+      setSeniorModeSaving(false);
+    }
+  };
+
+  const requestSeniorModeExit = useCallback(() => {
+    Alert.alert(
+      "Exit Senior mode?",
+      "This will return to all app controls on this device.",
+      [
+        { style: "cancel", text: "Keep Senior mode" },
+        {
+          onPress: () => { void exitSeniorMode(); },
+          style: "destructive",
+          text: "Exit",
+        },
+      ],
+    );
+  }, [seniorModeSaving, seniorModeSettings, user?._id]);
 
   const selectProfileImage = async () => {
     setSubmitting(true);
@@ -770,6 +943,90 @@ function FamilyHome() {
   };
 
   const currentMember = dashboard?.members.find((member) => member.userId === dashboard.currentUserId);
+  const selectableSeniorMembers = dashboard?.members.filter(
+    (member) => member.userId !== dashboard.currentUserId,
+  ) ?? [];
+  const selectedSeniorMemberIds = dashboard && activeFamilyId
+    ? availableSeniorModeMembers(
+        seniorModeSettings,
+        activeFamilyId,
+        selectableSeniorMembers.map((member) => member.userId),
+      ) as Id<"users">[]
+    : [];
+  const seniorModeActive =
+    seniorModeLoaded
+    && seniorModeSettings.enabled
+    && seniorModeSettings.familyId === activeFamilyId
+    && selectedSeniorMemberIds.length > 0;
+
+  useEffect(() => {
+    if (
+      !seniorModeLoaded
+      || !seniorModeSettings.enabled
+      || !user?._id
+      || families === undefined
+    ) return;
+
+    const familyExists = families.some(
+      (family) => family._id === seniorModeSettings.familyId,
+    );
+    const isConfiguredDashboard =
+      dashboard?.family._id === seniorModeSettings.familyId;
+    if (familyExists && (!isConfiguredDashboard || selectedSeniorMemberIds.length > 0)) {
+      return;
+    }
+
+    const next = { ...seniorModeSettings, enabled: false };
+    setSeniorModeSettingsState(next);
+    setStatus(
+      familyExists
+        ? "Senior mode was stopped because none of its selected family members are available."
+        : "Senior mode was stopped because its household is no longer available.",
+    );
+    void setSeniorModeSettings(user._id, next).catch(() => undefined);
+  }, [
+    dashboard?.family._id,
+    families,
+    selectedSeniorMemberIds.length,
+    seniorModeLoaded,
+    seniorModeSettings,
+    user?._id,
+  ]);
+
+  if (!seniorModeLoaded) {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator color="#fbbf24" size="large" />
+      </View>
+    );
+  }
+
+  if (seniorModeSettings.enabled) {
+    return (
+      <View style={styles.screen}>
+        <StatusBar hidden style="light" />
+        {deviceId !== null && dashboard ? (
+          <FamilyCallPanel
+            autoAnswerCalls={autoAnswerCallsLoaded && autoAnswerCalls}
+            currentUserId={dashboard.currentUserId}
+            deviceId={deviceId}
+            familyId={dashboard.family._id}
+            members={dashboard.members}
+            onCallSurfaceChange={handleCallSurfaceChange}
+            onSelectFamily={selectFamilyForIncomingCall}
+            seniorMode={{
+              memberIds: seniorModeActive ? selectedSeniorMemberIds : [],
+              onExitRequest: requestSeniorModeExit,
+            }}
+          />
+        ) : (
+          <View style={styles.loading}>
+            <ActivityIndicator color="#fbbf24" size="large" />
+          </View>
+        )}
+      </View>
+    );
+  }
 
   return (
     <View style={styles.screen}>
@@ -987,6 +1244,66 @@ function FamilyHome() {
                 secondary
               />
             )}
+          </View>
+        ) : null}
+
+        {dashboard ? (
+          <View style={styles.drawerSection}>
+            <Text style={styles.drawerKicker}>SENIOR MODE</Text>
+            <Text style={styles.settingTitle}>Picture-only calling</Text>
+            <Text style={styles.drawerMuted}>
+              Choose who appears on this device. Senior mode hides every other control, and tapping a picture starts a video call.
+            </Text>
+            {selectableSeniorMembers.length === 0 ? (
+              <Text style={styles.drawerMuted}>
+                Add another person to this household before starting Senior mode.
+              </Text>
+            ) : (
+              <View style={styles.seniorSelectionList}>
+                {selectableSeniorMembers.map((member) => {
+                  const selected =
+                    seniorModeSettings.familyId === activeFamilyId
+                    && seniorModeSettings.memberIds.includes(member.userId);
+                  const label = member.name ?? member.email ?? "Family member";
+                  return (
+                    <Pressable
+                      accessibilityLabel={`${selected ? "Remove" : "Add"} ${label} ${selected ? "from" : "to"} Senior mode`}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: selected }}
+                      disabled={seniorModeSaving}
+                      key={member.userId}
+                      onPress={() => void changeSeniorModeMember(member.userId)}
+                      style={({ pressed }) => [
+                        styles.seniorSelection,
+                        selected && styles.seniorSelectionSelected,
+                        pressed && styles.buttonPressed,
+                      ]}
+                    >
+                      <MemberAvatar image={member.image} label={label} size={52} />
+                      <Text numberOfLines={2} style={styles.seniorSelectionName}>{label}</Text>
+                      <View style={[
+                        styles.seniorCheckbox,
+                        selected && styles.seniorCheckboxSelected,
+                      ]}>
+                        <Text style={styles.seniorCheckboxText}>{selected ? "✓" : ""}</Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+            <Button
+              disabled={
+                seniorModeSaving
+                || seniorModeSettings.familyId !== activeFamilyId
+                || selectedSeniorMemberIds.length === 0
+              }
+              label={seniorModeSaving ? "Saving…" : "Start Senior mode"}
+              onPress={() => void startSeniorMode()}
+            />
+            <Text style={styles.seniorExitHelp}>
+              To exit later, press and hold the upper-right corner for 5 seconds, then confirm. For a stronger lock, also pin the app using the device settings.
+            </Text>
           </View>
         ) : null}
 
@@ -1626,6 +1943,57 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
     lineHeight: 21,
+  },
+  seniorSelectionList: {
+    gap: 8,
+  },
+  seniorSelection: {
+    alignItems: "center",
+    backgroundColor: "#0c0a09",
+    borderColor: "#44403c",
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 10,
+    minHeight: 72,
+    padding: 10,
+  },
+  seniorSelectionSelected: {
+    backgroundColor: "#422006",
+    borderColor: "#fbbf24",
+  },
+  seniorSelectionName: {
+    color: "#fafaf9",
+    flex: 1,
+    fontSize: 15,
+    fontWeight: "600",
+    lineHeight: 20,
+    minWidth: 0,
+  },
+  seniorCheckbox: {
+    alignItems: "center",
+    borderColor: "#78716c",
+    borderRadius: 8,
+    borderWidth: 2,
+    height: 28,
+    justifyContent: "center",
+    width: 28,
+  },
+  seniorCheckboxSelected: {
+    backgroundColor: "#fbbf24",
+    borderColor: "#fbbf24",
+  },
+  seniorCheckboxText: {
+    color: "#1c1917",
+    fontSize: 18,
+    fontWeight: "800",
+    lineHeight: 21,
+  },
+  seniorExitHelp: {
+    color: "#d6d3d1",
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 2,
   },
   profileImageRow: {
     alignItems: "flex-start",

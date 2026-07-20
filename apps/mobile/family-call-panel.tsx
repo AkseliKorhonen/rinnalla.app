@@ -37,6 +37,7 @@ import {
 } from "./native-call-service";
 import { MemberAvatar } from "./member-avatar";
 import { useResponsiveLayout } from "./responsive-layout";
+import { getSeniorModeLayout } from "./senior-mode-layout";
 
 type Member = {
   email: string | null;
@@ -53,6 +54,10 @@ type Props = {
   members: Member[];
   onCallSurfaceChange?: (visible: boolean) => void;
   onSelectFamily: (familyId: string) => void;
+  seniorMode?: {
+    memberIds: Id<"users">[];
+    onExitRequest: () => void;
+  };
 };
 
 type CallSnapshot = {
@@ -166,6 +171,7 @@ export function FamilyCallPanel({
   members,
   onCallSurfaceChange,
   onSelectFamily,
+  seniorMode,
 }: Props) {
   const insets = useSafeAreaInsets();
   const {
@@ -216,6 +222,9 @@ export function FamilyCallPanel({
     : null;
   const remoteMember = members.find((member) => member.userId === remoteUserId);
   const callableMembers = members.filter((member) => member.userId !== currentUserId);
+  const seniorModeMembers = seniorMode
+    ? callableMembers.filter((member) => seniorMode.memberIds.includes(member.userId))
+    : [];
   const isOwnedCall = activeCall
     ? isCallOwnedByDevice(
         activeCall,
@@ -737,7 +746,8 @@ export function FamilyCallPanel({
   const isShowingCallScreen =
     isConnected
     || answeringCallId !== null
-    || (incomingCall !== null && !isCallOnAnotherDevice);
+    || (incomingCall !== null && !isCallOnAnotherDevice)
+    || (seniorMode !== undefined && activeCall !== null && isOwnedCall);
 
   useLayoutEffect(() => {
     onCallSurfaceChange?.(isShowingCallScreen);
@@ -761,6 +771,16 @@ export function FamilyCallPanel({
     180,
     Math.min(isTablet ? 360 : 280, Math.round(width * (isLandscape ? 0.42 : 0.62))),
   );
+  const seniorHorizontalPadding = Math.max(insets.left + 20, 24)
+    + Math.max(insets.right + 20, 24);
+  const seniorLayout = getSeniorModeLayout({
+    height,
+    horizontalPadding: seniorHorizontalPadding,
+    isLandscape,
+    isTablet,
+    memberCount: seniorModeMembers.length,
+    width,
+  });
 
   return <>
     <Modal
@@ -905,19 +925,90 @@ export function FamilyCallPanel({
         ) : null}
       </View>
     </Modal>
-  <View style={[styles.panel, isCompactLandscape && styles.panelCompact]}>
-    <Text style={styles.kicker}>FAMILY CALLS</Text>
-    <Text style={styles.title}>{isCallOnAnotherDevice ? "Call in progress" : activeCall ? `Calling ${labelFor(remoteMember)}` : "Face-to-face check-ins"}</Text>
-    {error ? <Text style={styles.error}>{error}</Text> : null}
-    {isCallOnAnotherDevice ? <View style={styles.resolvedElsewhere}><Text style={styles.resolvedElsewhereText}>{callOnAnotherDeviceMessage}</Text></View> : activeCall && isOwnedCall && !isConnected ? <>
-      <View style={[styles.videoGrid, { height: embeddedVideoHeight }]}>
-        <View style={styles.video}>{remoteStream ? <RTCView mirror={false} objectFit="cover" streamURL={remoteStream.toURL()} style={styles.rtcView} zOrder={0} /> : <Text style={styles.waiting}>Waiting for {labelFor(remoteMember)}…</Text>}</View>
-        <View style={styles.localVideo}>{localStream ? <RTCView mirror objectFit="cover" streamURL={localStream.toURL()} style={styles.rtcView} zOrder={1} /> : null}</View>
-      </View>
-      <Action label="Hang up" onPress={() => void hangUp()} disabled={busy} danger />
-    </> : !incomingCall ? <View style={styles.members}>{callableMembers.length === 0 ? <Text style={styles.waiting}>Add another family member to start a call.</Text> : callableMembers.map((member) => <Action avatar={{ image: member.image, label: labelFor(member) }} key={member.userId} label={`Call ${labelFor(member)}`} onPress={() => void beginCall(member.userId)} disabled={busy} />)}</View> : null}
-    {busy ? <ActivityIndicator color="#bae6fd" style={styles.spinner} /> : null}
-  </View>
+  {seniorMode ? (
+    <View style={styles.seniorScreen}>
+      <ScrollView
+        bounces={false}
+        contentContainerStyle={[
+          styles.seniorContent,
+          {
+            minHeight: height,
+            paddingBottom: Math.max(insets.bottom + 24, 32),
+            paddingLeft: Math.max(insets.left + 20, 24),
+            paddingRight: Math.max(insets.right + 20, 24),
+            paddingTop: Math.max(insets.top + 24, 32),
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.seniorGrid}>
+          {seniorModeMembers.map((member) => {
+            const label = labelFor(member);
+            return (
+              <Pressable
+                accessibilityHint="Starts a video call"
+                accessibilityLabel={`Call ${label}`}
+                accessibilityRole="button"
+                disabled={busy || activeCall !== null}
+                key={member.userId}
+                onPress={() => void beginCall(member.userId)}
+                style={({ pressed }) => [
+                  styles.seniorMember,
+                  { width: seniorLayout.tileWidth },
+                  pressed && styles.seniorMemberPressed,
+                  (busy || activeCall !== null) && styles.disabled,
+                ]}
+              >
+                <MemberAvatar
+                  image={member.image}
+                  label={label}
+                  size={seniorLayout.avatarSize}
+                />
+                <Text numberOfLines={2} style={styles.seniorMemberName}>{label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        {isCallOnAnotherDevice ? (
+          <Text accessibilityLiveRegion="polite" style={styles.seniorMessage}>
+            {callOnAnotherDeviceMessage}
+          </Text>
+        ) : null}
+        {error ? (
+          <Text accessibilityLiveRegion="assertive" style={styles.seniorError}>{error}</Text>
+        ) : null}
+        {busy ? <ActivityIndicator color="#fbbf24" size="large" /> : null}
+      </ScrollView>
+      <Pressable
+        accessibilityHint="Keep holding, then confirm, to return to the regular app"
+        accessibilityLabel="Exit Senior mode"
+        accessibilityRole="button"
+        delayLongPress={5_000}
+        onLongPress={seniorMode.onExitRequest}
+        style={[
+          styles.seniorExitTarget,
+          {
+            right: Math.max(insets.right, 0),
+            top: Math.max(insets.top, 0),
+          },
+        ]}
+      />
+    </View>
+  ) : (
+    <View style={[styles.panel, isCompactLandscape && styles.panelCompact]}>
+      <Text style={styles.kicker}>FAMILY CALLS</Text>
+      <Text style={styles.title}>{isCallOnAnotherDevice ? "Call in progress" : activeCall ? `Calling ${labelFor(remoteMember)}` : "Face-to-face check-ins"}</Text>
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {isCallOnAnotherDevice ? <View style={styles.resolvedElsewhere}><Text style={styles.resolvedElsewhereText}>{callOnAnotherDeviceMessage}</Text></View> : activeCall && isOwnedCall && !isConnected ? <>
+        <View style={[styles.videoGrid, { height: embeddedVideoHeight }]}>
+          <View style={styles.video}>{remoteStream ? <RTCView mirror={false} objectFit="cover" streamURL={remoteStream.toURL()} style={styles.rtcView} zOrder={0} /> : <Text style={styles.waiting}>Waiting for {labelFor(remoteMember)}…</Text>}</View>
+          <View style={styles.localVideo}>{localStream ? <RTCView mirror objectFit="cover" streamURL={localStream.toURL()} style={styles.rtcView} zOrder={1} /> : null}</View>
+        </View>
+        <Action label="Hang up" onPress={() => void hangUp()} disabled={busy} danger />
+      </> : !incomingCall ? <View style={styles.members}>{callableMembers.length === 0 ? <Text style={styles.waiting}>Add another family member to start a call.</Text> : callableMembers.map((member) => <Action avatar={{ image: member.image, label: labelFor(member) }} key={member.userId} label={`Call ${labelFor(member)}`} onPress={() => void beginCall(member.userId)} disabled={busy} />)}</View> : null}
+      {busy ? <ActivityIndicator color="#bae6fd" style={styles.spinner} /> : null}
+    </View>
+  )}
   </>;
 }
 
@@ -941,6 +1032,75 @@ function Action({ avatar, label, onPress, disabled, secondary, danger }: { avata
 }
 
 const styles = StyleSheet.create({
+  seniorScreen: {
+    backgroundColor: "#111111",
+    flex: 1,
+  },
+  seniorContent: {
+    alignItems: "center",
+    flexGrow: 1,
+    gap: 22,
+    justifyContent: "center",
+  },
+  seniorGrid: {
+    alignItems: "center",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 20,
+    justifyContent: "center",
+    width: "100%",
+  },
+  seniorMember: {
+    alignItems: "center",
+    backgroundColor: "#1c1917",
+    borderColor: "#fbbf24",
+    borderRadius: 30,
+    borderWidth: 2,
+    elevation: 8,
+    gap: 16,
+    justifyContent: "center",
+    minHeight: 210,
+    padding: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 14,
+  },
+  seniorMemberPressed: {
+    opacity: 0.78,
+    transform: [{ scale: 0.98 }],
+  },
+  seniorMemberName: {
+    color: "#fafaf9",
+    fontSize: 28,
+    fontWeight: "700",
+    lineHeight: 34,
+    textAlign: "center",
+  },
+  seniorMessage: {
+    color: "#fef3c7",
+    fontSize: 18,
+    fontWeight: "600",
+    lineHeight: 25,
+    textAlign: "center",
+  },
+  seniorError: {
+    backgroundColor: "#4c0519",
+    borderColor: "#fb7185",
+    borderRadius: 16,
+    borderWidth: 1,
+    color: "#ffe4e6",
+    fontSize: 16,
+    lineHeight: 23,
+    maxWidth: 620,
+    padding: 14,
+    textAlign: "center",
+  },
+  seniorExitTarget: {
+    height: 64,
+    opacity: 0.01,
+    position: "absolute",
+    width: 64,
+  },
   panel: {
     backgroundColor: "#082f49",
     borderColor: "#0ea5e9",

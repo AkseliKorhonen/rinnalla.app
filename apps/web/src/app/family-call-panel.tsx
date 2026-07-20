@@ -4,6 +4,7 @@ import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { useAction, useMutation, useQuery } from "convex/react";
 import {
+  KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
   useRef,
@@ -11,6 +12,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { getOrCreateWebDeviceId } from "./web-device-identity";
+import { MemberAvatar } from "./member-avatar";
 
 type Member = {
   email: string | null;
@@ -25,6 +27,7 @@ type Props = {
   currentUserId: Id<"users">;
   familyId: Id<"families">;
   members: Member[];
+  onCallSurfaceChange?: (visible: boolean) => void;
 };
 
 type CallSnapshot = {
@@ -139,9 +142,14 @@ export function FamilyCallPanel({
   currentUserId,
   familyId,
   members,
+  onCallSurfaceChange,
 }: Props) {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const callSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const primaryCallActionRef = useRef<HTMLButtonElement | null>(null);
+  const previousCallFocusRef = useRef<HTMLElement | null>(null);
+  const wasPhoneCallDialogRef = useRef(false);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const localStreamPromiseRef = useRef<Promise<MediaStream> | null>(null);
@@ -159,6 +167,7 @@ export function FamilyCallPanel({
   const [callError, setCallError] = useState<string | null>(null);
   const [busyUserId, setBusyUserId] = useState<Id<"users"> | null>(null);
   const [locallyOwnedCallId, setLocallyOwnedCallId] = useState<Id<"calls"> | null>(null);
+  const [isPhoneViewport, setIsPhoneViewport] = useState(false);
   const deviceId = useSyncExternalStore(
     subscribeToWebDeviceIdentity,
     getOrCreateWebDeviceId,
@@ -174,6 +183,15 @@ export function FamilyCallPanel({
   const declineCall = useMutation(api.calls.decline);
   const endCall = useMutation(api.calls.end);
   const addIceCandidate = useMutation(api.calls.addIceCandidate);
+
+  useEffect(() => {
+    const phoneMedia = window.matchMedia("(max-width: 639px)");
+    const syncPhoneViewport = () => setIsPhoneViewport(phoneMedia.matches);
+
+    syncPhoneViewport();
+    phoneMedia.addEventListener("change", syncPhoneViewport);
+    return () => phoneMedia.removeEventListener("change", syncPhoneViewport);
+  }, []);
 
   const activeCall = callState?.call ?? null;
   const incomingCall =
@@ -390,7 +408,7 @@ export function FamilyCallPanel({
 
   useEffect(() => {
     attachStreams(localStream, remoteStream);
-  }, [attachStreams, localStream, remoteStream]);
+  }, [attachStreams, isOwnedCall, localStream, remoteStream]);
 
   useEffect(() => {
     watchRef.current = callState;
@@ -599,6 +617,84 @@ export function FamilyCallPanel({
 
   const isOnCall = activeCall !== null;
   const isIncoming = incomingCall !== null;
+  const hasForegroundCallSurface =
+    !isCallOnAnotherDevice && (isIncoming || isOwnedCall);
+  const isPhoneCallDialog = hasForegroundCallSurface && isPhoneViewport;
+
+  useEffect(() => {
+    onCallSurfaceChange?.(hasForegroundCallSurface);
+  }, [hasForegroundCallSurface, onCallSurfaceChange]);
+
+  useEffect(() => {
+    if (!isPhoneCallDialog) {
+      if (hasForegroundCallSurface) return;
+
+      if (!wasPhoneCallDialogRef.current) return;
+      wasPhoneCallDialogRef.current = false;
+      const previousFocus = previousCallFocusRef.current;
+      previousCallFocusRef.current = null;
+      const restoreFrame = window.requestAnimationFrame(() => {
+        const isMeaningfulRestoreTarget =
+          previousFocus?.isConnected &&
+          previousFocus !== document.body &&
+          previousFocus !== document.documentElement;
+        if (isMeaningfulRestoreTarget) {
+          previousFocus.focus();
+          if (document.activeElement === previousFocus) return;
+        }
+        const fallbackAction = callSurfaceRef.current?.querySelector<HTMLButtonElement>(
+          "button:not([disabled])",
+        );
+        (fallbackAction ?? callSurfaceRef.current)?.focus();
+      });
+      return () => window.cancelAnimationFrame(restoreFrame);
+    }
+
+    wasPhoneCallDialogRef.current = true;
+    if (
+      previousCallFocusRef.current === null &&
+      document.activeElement instanceof HTMLElement &&
+      document.activeElement !== document.body &&
+      document.activeElement !== document.documentElement
+    ) {
+      previousCallFocusRef.current = document.activeElement;
+    }
+    const focusFrame = window.requestAnimationFrame(() => {
+      const primaryAction = primaryCallActionRef.current;
+      if (primaryAction && !primaryAction.disabled) {
+        primaryAction.focus();
+      } else {
+        callSurfaceRef.current?.focus();
+      }
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [busyUserId, deviceId, hasForegroundCallSurface, isIncoming, isOwnedCall, isPhoneCallDialog]);
+
+  const keepFocusInsideCallSurface = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    if (!isPhoneCallDialog || event.key !== "Tab") return;
+    const callSurface = callSurfaceRef.current;
+    if (!callSurface) return;
+    const focusableElements = Array.from(
+      callSurface.querySelectorAll<HTMLButtonElement>("button:not([disabled])"),
+    );
+    const first = focusableElements[0];
+    const last = focusableElements.at(-1);
+    if (!first || !last) {
+      event.preventDefault();
+      callSurface.focus();
+      return;
+    }
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   const remoteLabel = getMemberLabel(remoteMember);
   const callOnAnotherDeviceMessage =
     activeCall?.status === "active" && activeCall.calleeId === currentUserId
@@ -608,16 +704,33 @@ export function FamilyCallPanel({
         : "This call is active on another device.";
 
   return (
-    <div className="space-y-4 rounded-3xl border border-sky-400/20 bg-sky-400/5 p-5">
+    <div
+      ref={callSurfaceRef}
+      aria-labelledby={isPhoneCallDialog ? "family-call-title" : undefined}
+      aria-modal={isPhoneCallDialog || undefined}
+      className={`min-w-0 space-y-4 rounded-3xl border border-sky-400/20 bg-sky-400/5 p-4 sm:p-5 ${hasForegroundCallSurface ? "foreground-call-surface" : ""}`}
+      onKeyDown={keepFocusInsideCallSurface}
+      role={isPhoneCallDialog ? "dialog" : undefined}
+      tabIndex={-1}
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
+        <div className="min-w-0">
           <p className="text-sm uppercase tracking-[0.3em] text-sky-200">
             Family Calls
           </p>
-          <h3 className="mt-2 text-2xl font-semibold text-stone-50">
-            Start a face-to-face check-in
-          </h3>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-stone-300">
+          <div className="mt-2 flex min-w-0 items-center gap-3">
+            {remoteMember ? (
+              <MemberAvatar
+                className="size-11"
+                image={remoteMember.image}
+                label={remoteLabel}
+              />
+            ) : null}
+            <h3 className="min-w-0 break-words text-xl font-semibold text-stone-50 sm:text-2xl" id="family-call-title">
+              {isIncoming ? `${remoteLabel} is calling` : isOwnedCall ? `Call with ${remoteLabel}` : "Start a face-to-face check-in"}
+            </h3>
+          </div>
+          <p className="call-description mt-2 max-w-2xl text-sm leading-6 text-stone-300">
             Calls use WebRTC in the browser. Convex handles the live signaling,
             and Cloudflare TURN can be used as the relay when direct peer
             connections are not enough.
@@ -625,7 +738,8 @@ export function FamilyCallPanel({
         </div>
         {isOwnedCall ? (
           <button
-            className="rounded-2xl border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm font-medium text-rose-100 transition hover:border-rose-300 disabled:cursor-not-allowed disabled:opacity-60"
+            ref={primaryCallActionRef}
+            className="min-h-11 w-full shrink-0 rounded-2xl border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm font-medium text-rose-100 transition hover:border-rose-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-200 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
             disabled={busyUserId !== null}
             onClick={onHangUp}
             type="button"
@@ -636,7 +750,7 @@ export function FamilyCallPanel({
       </div>
 
       {callError ? (
-        <p className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
+        <p className="break-words rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
           {callError}
         </p>
       ) : null}
@@ -648,18 +762,26 @@ export function FamilyCallPanel({
       ) : null}
 
       {isIncoming ? (
-        <div className="flex flex-col gap-3 rounded-2xl border border-amber-300/30 bg-amber-300/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm uppercase tracking-[0.24em] text-amber-200">
-              Incoming call
-            </p>
-            <p className="mt-2 text-lg font-medium text-stone-50">
-              {remoteLabel} is calling you
-            </p>
+        <div aria-live="assertive" className="flex min-w-0 flex-col gap-4 rounded-2xl border border-amber-300/30 bg-amber-300/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <MemberAvatar
+              className="size-14"
+              image={remoteMember?.image}
+              label={remoteLabel}
+            />
+            <div className="min-w-0">
+              <p className="text-sm uppercase tracking-[0.24em] text-amber-200">
+                Incoming call
+              </p>
+              <p className="mt-2 break-words text-lg font-medium text-stone-50">
+                {remoteLabel} is calling you
+              </p>
+            </div>
           </div>
-          <div className="flex gap-3">
+          <div className="grid w-full grid-cols-2 gap-3 sm:w-auto">
             <button
-              className="rounded-2xl bg-emerald-300 px-4 py-3 text-sm font-medium text-stone-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
+              ref={primaryCallActionRef}
+              className="min-h-11 rounded-2xl bg-emerald-300 px-4 py-3 text-sm font-medium text-stone-950 transition hover:bg-emerald-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={busyUserId !== null || deviceId === null}
               onClick={onAccept}
               type="button"
@@ -667,7 +789,7 @@ export function FamilyCallPanel({
               Answer
             </button>
             <button
-              className="rounded-2xl border border-stone-600 px-4 py-3 text-sm font-medium text-stone-100 transition hover:border-stone-400 disabled:cursor-not-allowed disabled:opacity-60"
+              className="min-h-11 rounded-2xl border border-stone-600 px-4 py-3 text-sm font-medium text-stone-100 transition hover:border-stone-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-200 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={busyUserId !== null || deviceId === null}
               onClick={onDecline}
               type="button"
@@ -679,7 +801,7 @@ export function FamilyCallPanel({
       ) : null}
 
       {!isOnCall ? (
-        <div className="flex flex-wrap gap-3">
+        <div className="grid gap-3 sm:flex sm:flex-wrap">
           {callableMembers.length === 0 ? (
             <p className="text-sm text-stone-400">
               Add another family member to start a call.
@@ -688,20 +810,25 @@ export function FamilyCallPanel({
             callableMembers.map((member) => (
               <button
                 key={member.userId}
-                className="rounded-full border border-sky-300/30 bg-sky-300/10 px-4 py-2 text-sm font-medium text-sky-100 transition hover:border-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex min-h-11 min-w-0 items-center justify-center gap-2 break-words rounded-2xl border border-sky-300/30 bg-sky-300/10 px-4 py-2 text-sm font-medium text-sky-100 transition hover:border-sky-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200 disabled:cursor-not-allowed disabled:opacity-60 sm:rounded-full"
                 disabled={busyUserId !== null || deviceId === null}
                 onClick={() => onStartCall(member.userId)}
                 type="button"
               >
-                Call {getMemberLabel(member)}
+                <MemberAvatar
+                  className="size-8"
+                  image={member.image}
+                  label={getMemberLabel(member)}
+                />
+                <span>Call {getMemberLabel(member)}</span>
               </button>
             ))
           )}
         </div>
       ) : null}
 
-      {!isCallOnAnotherDevice ? <div className="grid gap-4 lg:grid-cols-2">
-        <div className="overflow-hidden rounded-3xl border border-stone-800 bg-stone-950">
+      {isOwnedCall ? <div className="foreground-video-grid grid min-w-0 gap-4 md:grid-cols-2">
+        <div className="min-w-0 overflow-hidden rounded-3xl border border-stone-800 bg-stone-950">
           <div className="border-b border-stone-800 px-4 py-3">
             <p className="text-xs uppercase tracking-[0.24em] text-stone-500">
               You
@@ -710,12 +837,12 @@ export function FamilyCallPanel({
           <video
             ref={localVideoRef}
             autoPlay
-            className="aspect-video w-full bg-stone-950 object-cover"
+            className="block aspect-video min-w-0 w-full bg-stone-950 object-cover"
             muted
             playsInline
           />
         </div>
-        <div className="overflow-hidden rounded-3xl border border-stone-800 bg-stone-950">
+        <div className="min-w-0 overflow-hidden rounded-3xl border border-stone-800 bg-stone-950">
           <div className="border-b border-stone-800 px-4 py-3">
             <p className="text-xs uppercase tracking-[0.24em] text-stone-500">
               {isOnCall ? remoteLabel : "Waiting for call"}
@@ -724,7 +851,7 @@ export function FamilyCallPanel({
           <video
             ref={remoteVideoRef}
             autoPlay
-            className="aspect-video w-full bg-stone-950 object-cover"
+            className="block aspect-video min-w-0 w-full bg-stone-950 object-cover"
             playsInline
           />
         </div>

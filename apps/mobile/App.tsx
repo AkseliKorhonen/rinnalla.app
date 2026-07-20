@@ -1,21 +1,31 @@
 import { ConvexAuthProvider, useAuthActions } from "@convex-dev/auth/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { File, UploadType } from "expo-file-system";
+import * as ImagePicker from "expo-image-picker";
 import * as SecureStore from "expo-secure-store";
 import { StatusBar } from "expo-status-bar";
 import {
   ActivityIndicator,
+  Keyboard,
+  KeyboardAvoidingView,
   Pressable,
   Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
 } from "react-native";
 import {
+  SafeAreaProvider,
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
+import {
   ConvexReactClient,
+  useAction,
   useConvexAuth,
   useMutation,
   useQuery,
@@ -28,9 +38,14 @@ import {
   useSyncExternalStore,
 } from "react";
 import { FamilyCallPanel } from "./family-call-panel";
+import { MemberAvatar } from "./member-avatar";
+import { ResponsiveDrawer } from "./responsive-drawer";
+import { useResponsiveLayout } from "./responsive-layout";
 import { registerIncomingCallNotifications } from "./call-notifications";
 import {
+  getAutoAnswerCallsEnabled,
   getDeviceId,
+  setAutoAnswerCallsEnabled,
   setCallNotificationsEnabled,
 } from "./device-identity";
 import {
@@ -43,6 +58,12 @@ import {
 const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL;
 const REGISTRATION_CLEANUP_TIMEOUT_MS = 3_000;
 const REGISTRATION_RETRY_MAX_MS = 60_000;
+const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
+const PROFILE_IMAGE_CONTENT_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
 
 async function waitForPromisesWithTimeout(
   promises: Promise<unknown>[],
@@ -72,10 +93,15 @@ const tokenStorage = {
 
 const convex = convexUrl ? new ConvexReactClient(convexUrl) : null;
 
-type AuthScreen = "signIn" | "signUp" | "resetRequest" | "resetVerify";
+type AuthScreen = "signIn" | "signUp" | "verifyEmail" | "resetRequest" | "resetVerify";
 
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
+}
+
+function profileImageContentType(mimeType: string | null | undefined) {
+  if (mimeType === "image/jpg") return "image/jpeg";
+  return mimeType ?? "image/jpeg";
 }
 
 function Button({
@@ -91,6 +117,7 @@ function Button({
 }) {
   return (
     <Pressable
+      accessibilityRole="button"
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
@@ -109,10 +136,13 @@ function Button({
 
 function AuthPanel() {
   const { signIn } = useAuthActions();
+  const insets = useSafeAreaInsets();
+  const { isCompactLandscape, isLandscape, isTablet } = useResponsiveLayout();
   const [screen, setScreen] = useState<AuthScreen>("signIn");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [emailVerificationCode, setEmailVerificationCode] = useState("");
   const [resetCode, setResetCode] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -124,6 +154,7 @@ function AuthPanel() {
   }, [status]);
 
   const submitCredentials = async () => {
+    Keyboard.dismiss();
     setSubmitting(true);
     setStatus(null);
     try {
@@ -135,6 +166,15 @@ function AuthPanel() {
       });
       if (result.signingIn) {
         setStatus(screen === "signUp" ? "Account created." : "Signed in.");
+      } else {
+        setPassword("");
+        setEmailVerificationCode("");
+        setScreen("verifyEmail");
+        setStatus(
+          screen === "signUp"
+            ? "Account created. Enter the verification code from your email."
+            : "Enter the verification code we sent to your email.",
+        );
       }
     } catch (error) {
       setStatus(getErrorMessage(error, "Authentication failed."));
@@ -143,11 +183,50 @@ function AuthPanel() {
     }
   };
 
+  const verifyEmail = async () => {
+    Keyboard.dismiss();
+    setSubmitting(true);
+    setStatus(null);
+    try {
+      const result = await signIn("password", {
+        code: emailVerificationCode,
+        email,
+        flow: "email-verification",
+      });
+      if (!result.signingIn) {
+        throw new Error("That verification code could not be verified.");
+      }
+      setEmailVerificationCode("");
+      setStatus("Email verified. You are signed in.");
+    } catch (error) {
+      setStatus(getErrorMessage(error, "That verification code could not be verified."));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const resendEmailVerification = async () => {
+    Keyboard.dismiss();
+    setSubmitting(true);
+    setStatus(null);
+    try {
+      await signIn("password", { email, flow: "email-verification" });
+      setEmailVerificationCode("");
+      setStatus("We sent a new verification code to your email.");
+    } catch (error) {
+      setStatus(getErrorMessage(error, "Could not send a new verification code."));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const requestReset = async () => {
+    Keyboard.dismiss();
     setSubmitting(true);
     setStatus(null);
     try {
       await signIn("password", { email, flow: "reset" });
+      setPassword("");
       setScreen("resetVerify");
       setStatus("If an account matches that email, we sent a reset code.");
     } catch {
@@ -158,6 +237,7 @@ function AuthPanel() {
   };
 
   const verifyReset = async () => {
+    Keyboard.dismiss();
     setSubmitting(true);
     setStatus(null);
     try {
@@ -179,102 +259,179 @@ function AuthPanel() {
   };
 
   const isReset = screen === "resetRequest" || screen === "resetVerify";
+  const isVerifyingEmail = screen === "verifyEmail";
   const submit =
-    screen === "resetRequest"
+    isVerifyingEmail
+      ? verifyEmail
+      : screen === "resetRequest"
       ? requestReset
       : screen === "resetVerify"
         ? verifyReset
         : submitCredentials;
+  const requiresPassword = screen === "signIn" || screen === "signUp" || screen === "resetVerify";
+  const submitDisabled =
+    submitting
+    || !email
+    || (screen === "signUp" && displayName.trim().length < 2)
+    || (requiresPassword && !password)
+    || (screen === "resetVerify" && !resetCode)
+    || (isVerifyingEmail && emailVerificationCode.length !== 8);
 
   return (
-    <ScrollView contentContainerStyle={styles.authContent} keyboardShouldPersistTaps="handled">
-      <Text style={styles.kicker}>RINNALLA.APP</Text>
-      <Text style={styles.title}>
-        {isReset ? "Reset your password" : "Stay close, even from afar."}
-      </Text>
-      <Text style={styles.body}>
-        {screen === "resetVerify"
-          ? "Enter the code from your email and choose a new password."
-          : isReset
-            ? "Enter your email and we will send a reset code."
-            : "A simple place for families to see who is available and connect face to face."}
-      </Text>
+    <View style={styles.screen}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.screen}
+      >
+        <ScrollView
+          contentContainerStyle={[
+            styles.authContent,
+            isTablet && styles.authContentTablet,
+            isCompactLandscape && styles.authContentCompactLandscape,
+            {
+              paddingBottom: Math.max(insets.bottom + 24, 32),
+              paddingTop: isCompactLandscape ? 16 : 28,
+            },
+          ]}
+          contentInsetAdjustmentBehavior="automatic"
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+        >
+          <View
+            style={[
+              styles.authCard,
+              isTablet && isLandscape && styles.authCardWide,
+            ]}
+          >
+            <View style={styles.authIntro}>
+              <Text style={styles.kicker}>RINNALLA.APP</Text>
+              <Text
+                accessibilityRole="header"
+                style={[styles.title, isCompactLandscape && styles.titleCompact]}
+              >
+                {isVerifyingEmail ? "Verify your email" : isReset ? "Reset your password" : "Stay close, even from afar."}
+              </Text>
+              <Text style={styles.body}>
+                {isVerifyingEmail
+                  ? `Enter the eight-digit code sent to ${email}. The code expires in 15 minutes.`
+                  : screen === "resetVerify"
+                  ? "Enter the code from your email and choose a new password."
+                  : isReset
+                    ? "Enter your email and we will send a reset code."
+                    : "A simple place for families to see who is available and connect face to face."}
+              </Text>
+            </View>
 
-      {!isReset ? (
-        <View style={styles.segmentedControl}>
-          <Pressable onPress={() => setScreen("signIn")} style={[styles.segment, screen === "signIn" && styles.segmentSelected]}>
-            <Text style={screen === "signIn" ? styles.segmentSelectedText : styles.segmentText}>Sign in</Text>
-          </Pressable>
-          <Pressable onPress={() => setScreen("signUp")} style={[styles.segment, screen === "signUp" && styles.segmentSelected]}>
-            <Text style={screen === "signUp" ? styles.segmentSelectedText : styles.segmentText}>Create account</Text>
-          </Pressable>
+            <View style={styles.authControls}>
+              {!isReset && !isVerifyingEmail ? (
+                <View style={styles.segmentedControl}>
+                  <Pressable
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: screen === "signIn" }}
+                    onPress={() => setScreen("signIn")}
+                    style={[styles.segment, screen === "signIn" && styles.segmentSelected]}
+                  >
+                    <Text style={screen === "signIn" ? styles.segmentSelectedText : styles.segmentText}>Sign in</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: screen === "signUp" }}
+                    onPress={() => setScreen("signUp")}
+                    style={[styles.segment, screen === "signUp" && styles.segmentSelected]}
+                  >
+                    <Text style={screen === "signUp" ? styles.segmentSelectedText : styles.segmentText}>Create account</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+
+              <View style={styles.form}>
+                {screen === "signUp" ? <>
+                  <Text style={styles.label}>Your name</Text>
+                  <TextInput accessibilityLabel="Your name" autoComplete="name" onChangeText={setDisplayName} placeholder="How should your family see you?" placeholderTextColor="#78716c" style={styles.input} value={displayName} />
+                </> : null}
+                <Text style={styles.label}>Email</Text>
+                <TextInput
+                  accessibilityLabel="Email"
+                  autoCapitalize="none"
+                  autoComplete="email"
+                  editable={!isVerifyingEmail}
+                  keyboardType="email-address"
+                  onChangeText={setEmail}
+                  placeholder="you@example.com"
+                  placeholderTextColor="#78716c"
+                  style={styles.input}
+                  value={email}
+                />
+
+                {screen === "resetVerify" || isVerifyingEmail ? (
+                  <>
+                    <Text style={styles.label}>{isVerifyingEmail ? "Verification code" : "Reset code"}</Text>
+                    <TextInput
+                      accessibilityLabel={isVerifyingEmail ? "Verification code" : "Reset code"}
+                      autoComplete="one-time-code"
+                      keyboardType="number-pad"
+                      maxLength={8}
+                      onChangeText={(value) => {
+                        const code = value.replace(/\D/g, "");
+                        if (isVerifyingEmail) setEmailVerificationCode(code);
+                        else setResetCode(code);
+                      }}
+                      placeholder="12345678"
+                      placeholderTextColor="#78716c"
+                      style={styles.input}
+                      value={isVerifyingEmail ? emailVerificationCode : resetCode}
+                    />
+                  </>
+                ) : null}
+
+                {screen !== "resetRequest" && !isVerifyingEmail ? (
+                  <>
+                    <Text style={styles.label}>{screen === "resetVerify" ? "New password" : "Password"}</Text>
+                    <TextInput
+                      accessibilityLabel={screen === "resetVerify" ? "New password" : "Password"}
+                      autoComplete={screen === "signIn" ? "current-password" : "new-password"}
+                      onChangeText={setPassword}
+                      placeholder="At least 8 characters"
+                      placeholderTextColor="#78716c"
+                      secureTextEntry
+                      style={styles.input}
+                      value={password}
+                    />
+                  </>
+                ) : null}
+
+                <Button
+                  disabled={submitDisabled}
+                  label={submitting ? "Working..." : screen === "signUp" ? "Create account" : isVerifyingEmail ? "Verify email" : screen === "resetRequest" ? "Send reset code" : screen === "resetVerify" ? "Reset password" : "Sign in"}
+                  onPress={() => void submit()}
+                />
+
+                {screen === "signIn" ? <Button label="Forgot password?" onPress={() => { setPassword(""); setScreen("resetRequest"); }} secondary /> : null}
+                {isVerifyingEmail ? <Button disabled={submitting} label="Send a new code" onPress={() => void resendEmailVerification()} secondary /> : null}
+                {isReset || isVerifyingEmail ? <Button label="Back to sign in" onPress={() => { setEmailVerificationCode(""); setResetCode(""); setScreen("signIn"); }} secondary /> : null}
+              </View>
+            </View>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+      {status ? (
+        <View
+          accessibilityLiveRegion="polite"
+          pointerEvents="none"
+          style={[styles.toast, { bottom: Math.max(insets.bottom + 12, 18) }]}
+        >
+          <Text style={styles.toastText}>{status}</Text>
         </View>
       ) : null}
-
-      <View style={styles.form}>
-        {screen === "signUp" ? <>
-          <Text style={styles.label}>Your name</Text>
-          <TextInput autoComplete="name" onChangeText={setDisplayName} placeholder="How should your family see you?" placeholderTextColor="#78716c" style={styles.input} value={displayName} />
-        </> : null}
-        <Text style={styles.label}>Email</Text>
-        <TextInput
-          autoCapitalize="none"
-          autoComplete="email"
-          keyboardType="email-address"
-          onChangeText={setEmail}
-          placeholder="you@example.com"
-          placeholderTextColor="#78716c"
-          style={styles.input}
-          value={email}
-        />
-
-        {screen === "resetVerify" ? (
-          <>
-            <Text style={styles.label}>Reset code</Text>
-            <TextInput
-              autoComplete="one-time-code"
-              keyboardType="number-pad"
-              onChangeText={setResetCode}
-              placeholder="12345678"
-              placeholderTextColor="#78716c"
-              style={styles.input}
-              value={resetCode}
-            />
-          </>
-        ) : null}
-
-        {screen !== "resetRequest" ? (
-          <>
-            <Text style={styles.label}>{screen === "resetVerify" ? "New password" : "Password"}</Text>
-            <TextInput
-              autoComplete={screen === "signIn" ? "current-password" : "new-password"}
-              onChangeText={setPassword}
-              placeholder="At least 8 characters"
-              placeholderTextColor="#78716c"
-              secureTextEntry
-              style={styles.input}
-              value={password}
-            />
-          </>
-        ) : null}
-
-        <Button
-          disabled={submitting || !email || (screen === "signUp" && displayName.trim().length < 2) || (screen !== "resetRequest" && !password) || (screen === "resetVerify" && !resetCode)}
-          label={submitting ? "Working..." : screen === "signUp" ? "Create account" : screen === "resetRequest" ? "Send reset code" : screen === "resetVerify" ? "Reset password" : "Sign in"}
-          onPress={() => void submit()}
-        />
-
-        {screen === "signIn" ? <Button label="Forgot password?" onPress={() => setScreen("resetRequest")} secondary /> : null}
-        {isReset ? <Button label="Back to sign in" onPress={() => setScreen("signIn")} secondary /> : null}
-      </View>
-      {status ? <View style={styles.toast}><Text style={styles.toastText}>{status}</Text></View> : null}
-    </ScrollView>
+    </View>
   );
 }
 
 function FamilyHome() {
   const { signOut } = useAuthActions();
   const { isAuthenticated } = useConvexAuth();
+  const insets = useSafeAreaInsets();
+  const { isCompactLandscape, isWide } = useResponsiveLayout();
   const families = useQuery(api.families.listMy, isAuthenticated ? {} : "skip");
   const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
   const [selectedFamilyId, setSelectedFamilyId] = useState<Id<"families"> | null>(null);
@@ -285,6 +442,11 @@ function FamilyHome() {
   const [pendingIncomingFamilyId, setPendingIncomingFamilyId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [householdMenuOpen, setHouseholdMenuOpen] = useState(false);
+  const [callSurfaceVisible, setCallSurfaceVisible] = useState(false);
+  const [autoAnswerCalls, setAutoAnswerCalls] = useState(false);
+  const [autoAnswerCallsLoaded, setAutoAnswerCallsLoaded] = useState(false);
+  const [autoAnswerCallsSaving, setAutoAnswerCallsSaving] = useState(false);
   const [notificationRegistrationEpoch, setNotificationRegistrationEpoch] = useState(0);
   const activeNotificationListenersRef = useRef(new Set<() => void>());
   const notificationRegistrationsRef = useRef(new Set<Promise<() => void>>());
@@ -308,6 +470,13 @@ function FamilyHome() {
   const removeMember = useMutation(api.families.removeMember);
   const leaveFamily = useMutation(api.families.leave);
   const updateName = useMutation(api.users.updateName);
+  const generateProfileImageUploadUrl = useMutation(
+    api.users.generateProfileImageUploadUrl,
+  );
+  const updateProfileImage = useAction(
+    api.profileImageActions.updateProfileImage,
+  );
+  const removeProfileImage = useMutation(api.users.removeProfileImage);
   const registerPushToken = useMutation(api.pushTokens.register);
   const unregisterPushDevice = useMutation(api.pushTokens.unregisterDevice);
   const registerPushTokenForDevice = useCallback((args: {
@@ -338,6 +507,29 @@ function FamilyHome() {
       });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    const userId = user?._id;
+    let cancelled = false;
+    setAutoAnswerCalls(false);
+    setAutoAnswerCallsLoaded(false);
+    if (!userId) return () => { cancelled = true; };
+
+    void getAutoAnswerCallsEnabled(userId)
+      .then((enabled) => {
+        if (!cancelled) {
+          setAutoAnswerCalls(enabled);
+          setAutoAnswerCallsLoaded(true);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setAutoAnswerCallsLoaded(true);
+          setStatus(getErrorMessage(error, "Could not load call settings."));
+        }
+      });
+    return () => { cancelled = true; };
+  }, [user?._id]);
 
   const activeFamilyId = families?.some((family) => family._id === selectedFamilyId)
     ? selectedFamilyId
@@ -437,6 +629,7 @@ function FamilyHome() {
 
   const signOutFromDevice = async () => {
     if (signingOutRef.current) return;
+    Keyboard.dismiss();
     signingOutRef.current = true;
     setSubmitting(true);
     const cleanupDeadline = Date.now() + REGISTRATION_CLEANUP_TIMEOUT_MS;
@@ -499,14 +692,111 @@ function FamilyHome() {
     }
   };
 
-  const perform = async (operation: () => Promise<void>, success: string) => {
+  const perform = async (operation: () => Promise<void>, success?: string) => {
+    Keyboard.dismiss();
     setSubmitting(true);
     setStatus(null);
     try {
       await operation();
-      setStatus(success);
+      if (success) setStatus(success);
     } catch (error) {
       setStatus(getErrorMessage(error, "Something went wrong."));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const closeHouseholdMenu = useCallback(() => {
+    Keyboard.dismiss();
+    setHouseholdMenuOpen(false);
+  }, []);
+
+  const handleCallSurfaceChange = useCallback((visible: boolean) => {
+    setCallSurfaceVisible(visible);
+    if (visible) closeHouseholdMenu();
+  }, [closeHouseholdMenu]);
+
+  const changeAutoAnswerCalls = async (enabled: boolean) => {
+    if (!user?._id || autoAnswerCallsSaving) return;
+    const previous = autoAnswerCalls;
+    setAutoAnswerCalls(enabled);
+    setAutoAnswerCallsSaving(true);
+    setStatus(null);
+    try {
+      await setAutoAnswerCallsEnabled(user._id, enabled);
+      setStatus(
+        enabled
+          ? "Calls will be answered automatically while rinnalla.app is open."
+          : "Automatic call answering is off.",
+      );
+    } catch (error) {
+      setAutoAnswerCalls(previous);
+      setStatus(getErrorMessage(error, "Could not update call settings."));
+    } finally {
+      setAutoAnswerCallsSaving(false);
+    }
+  };
+
+  const selectProfileImage = async () => {
+    setSubmitting(true);
+    setStatus(null);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        allowsEditing: true,
+        aspect: [1, 1],
+        mediaTypes: ["images"],
+        quality: 0.8,
+      });
+      if (result.canceled) return;
+
+      const asset = result.assets[0];
+      const contentType = profileImageContentType(asset.mimeType);
+      if (!PROFILE_IMAGE_CONTENT_TYPES.has(contentType)) {
+        throw new Error("Choose a JPEG, PNG, or WebP image.");
+      }
+      if (
+        asset.fileSize !== undefined
+        && asset.fileSize > MAX_PROFILE_IMAGE_BYTES
+      ) {
+        throw new Error("Profile pictures must be 5 MB or smaller.");
+      }
+
+      const image = new File(asset.uri);
+      if (!image.exists) throw new Error("Could not read the selected picture.");
+      if (image.size > MAX_PROFILE_IMAGE_BYTES) {
+        throw new Error("Profile pictures must be 5 MB or smaller.");
+      }
+
+      const uploadUrl = await generateProfileImageUploadUrl({});
+      const uploadResponse = await image.upload(uploadUrl, {
+        headers: { "Content-Type": contentType },
+        httpMethod: "POST",
+        uploadType: UploadType.BINARY_CONTENT,
+      });
+      if (uploadResponse.status < 200 || uploadResponse.status >= 300) {
+        throw new Error("Could not upload your picture.");
+      }
+      const upload = JSON.parse(uploadResponse.body) as {
+        storageId?: Id<"_storage">;
+      };
+      if (!upload.storageId) throw new Error("The upload did not return a file ID.");
+      await updateProfileImage({ storageId: upload.storageId });
+      setStatus("Your picture has been updated.");
+    } catch (error) {
+      setStatus(getErrorMessage(error, "Could not update your picture."));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const removeCurrentProfileImage = async () => {
+    setSubmitting(true);
+    setStatus(null);
+    try {
+      await removeProfileImage({});
+      setStatus("Your picture has been removed.");
+    } catch (error) {
+      setStatus(getErrorMessage(error, "Could not remove your picture."));
     } finally {
       setSubmitting(false);
     }
@@ -515,83 +805,352 @@ function FamilyHome() {
   const currentMember = dashboard?.members.find((member) => member.userId === dashboard.currentUserId);
 
   return (
-    <ScrollView contentContainerStyle={styles.homeContent}>
-      <View style={styles.headerRow}>
-        <View>
-          <Text style={styles.kicker}>RINNALLA.APP</Text>
-          <Text style={styles.homeTitle}>{dashboard?.family.name ?? "Your families"}</Text>
-          <Text style={styles.panelText}>{user?.name ?? user?.email ?? ""}</Text>
-        </View>
-        <Pressable onPress={() => void signOutFromDevice()}><Text style={styles.link}>Sign out</Text></Pressable>
-      </View>
-
-      {families === undefined ? <ActivityIndicator color="#fbbf24" size="large" /> : families.length === 0 ? (
-        <View style={styles.panel}>
-          <Text style={styles.label}>Your name</Text>
-          <TextInput onChangeText={setDisplayName} placeholder={user?.name ?? "How should your family see you?"} placeholderTextColor="#78716c" style={styles.input} value={displayName} />
-          <Button disabled={submitting || displayName.trim().length < 2} label="Save your name" onPress={() => void perform(() => updateName({ name: displayName }).then(() => { setDisplayName(""); }), "Your name has been updated.")} secondary />
-          <Text style={styles.panelTitle}>Connect your family</Text>
-          <Text style={styles.panelText}>Create a household or join one with an invite code.</Text>
-          <Text style={styles.label}>Family name</Text>
-          <TextInput onChangeText={setFamilyName} placeholder="Korhonen family" placeholderTextColor="#78716c" style={styles.input} value={familyName} />
-          <Button disabled={submitting || !familyName.trim()} label="Create family" onPress={() => void perform(async () => { await createFamily({ name: familyName }); setFamilyName(""); }, "Family created.")} />
-          <Text style={styles.or}>or</Text>
-          <Text style={styles.label}>Invite code</Text>
-          <TextInput autoCapitalize="characters" onChangeText={setInviteCode} placeholder="ABC123" placeholderTextColor="#78716c" style={styles.input} value={inviteCode} />
-          <Button disabled={submitting || !inviteCode.trim()} label="Join family" onPress={() => void perform(async () => { await joinFamily({ inviteCode }); setInviteCode(""); }, "Joined family.")} secondary />
-        </View>
-      ) : (
-        <>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.familyTabs}>
-            {families.map((family) => (
-              <Pressable key={family._id} onPress={() => setSelectedFamilyId(family._id)} style={[styles.familyTab, family._id === activeFamilyId && styles.familyTabSelected]}>
-                <Text style={family._id === activeFamilyId ? styles.familyTabSelectedText : styles.familyTabText}>{family.name}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-
-          {dashboard ? <>
-            {deviceId === null ? (
-              <View style={styles.panel}>
-                <ActivityIndicator color="#fbbf24" size="large" />
-                <Text style={styles.panelText}>Preparing secure calling on this device...</Text>
-              </View>
-            ) : (
-              <FamilyCallPanel
-                currentUserId={dashboard.currentUserId}
-                deviceId={deviceId}
-                familyId={dashboard.family._id}
-                members={dashboard.members}
-                onSelectFamily={selectFamilyForIncomingCall}
-              />
-            )}
-            <View style={styles.panel}>
-              <View style={styles.panelHeader}>
-                <View>
-                  <Text style={styles.panelTitle}>Family members</Text>
-                  <Text style={styles.panelText}>Everyone in this household can be called.</Text>
+    <View style={styles.screen}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.screen}
+      >
+        <ScrollView
+          contentContainerStyle={[
+            styles.homeContent,
+            isCompactLandscape && styles.homeContentCompact,
+            { paddingBottom: Math.max(insets.bottom + 40, 48) },
+          ]}
+          contentInsetAdjustmentBehavior="automatic"
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.homeFrame}>
+            <View style={styles.headerRow}>
+              <View style={styles.headerCopy}>
+                <Text style={styles.kicker}>RINNALLA.APP</Text>
+                <Text accessibilityRole="header" style={styles.homeTitle}>
+                  {dashboard?.family.name ?? "Your household"}
+                </Text>
+                <View style={styles.userMenuRow}>
+                  <MemberAvatar
+                    image={user?.image}
+                    label={user?.name ?? user?.email ?? "Authenticated user"}
+                    size={46}
+                  />
+                  <Text numberOfLines={2} style={styles.userName}>
+                    {user?.name ?? user?.email ?? "Authenticated user"}
+                  </Text>
+                  <Pressable
+                    accessibilityLabel="Open household settings"
+                    accessibilityRole="button"
+                    hitSlop={10}
+                    onPress={() => setHouseholdMenuOpen(true)}
+                    style={({ pressed }) => [styles.menuButton, pressed && styles.buttonPressed]}
+                  >
+                    <Text style={styles.menuButtonText}>⚙</Text>
+                  </Pressable>
                 </View>
-                <Text style={styles.inviteCode}>{dashboard.family.inviteCode}</Text>
               </View>
-              {dashboard.members.map((member) => (
-                <View key={member.userId} style={styles.member}>
-                  <View style={styles.memberIdentity}>
-                    <View>
-                      <Text style={styles.memberName}>{member.name ?? member.email ?? "Family member"}</Text>
-                      <Text style={styles.memberDetail}>{member.email ?? "No email available"}</Text>
+            </View>
+
+            {families === undefined ? (
+              <View style={styles.centeredPanel}>
+                <ActivityIndicator color="#fbbf24" size="large" />
+                <Text style={styles.panelText}>Loading your households…</Text>
+              </View>
+            ) : families.length === 0 ? (
+              <View style={styles.emptyHouseholdPanel}>
+                <Text style={styles.panelTitle}>No household connected yet</Text>
+                <Text style={styles.panelText}>
+                  Open household settings to create a family or join one with an invite code.
+                </Text>
+                <Button label="Open household settings" onPress={() => setHouseholdMenuOpen(true)} />
+              </View>
+            ) : dashboard ? (
+              <View style={[styles.dashboardGrid, isWide && styles.dashboardGridWide]}>
+                <View style={[styles.dashboardPrimary, isWide && styles.dashboardPrimaryWide]}>
+                  {deviceId === null ? (
+                    <View style={styles.centeredPanel}>
+                      <ActivityIndicator color="#fbbf24" size="large" />
+                      <Text style={styles.panelText}>Preparing secure calling on this device…</Text>
+                    </View>
+                  ) : (
+                    <FamilyCallPanel
+                      autoAnswerCalls={autoAnswerCallsLoaded && autoAnswerCalls}
+                      currentUserId={dashboard.currentUserId}
+                      deviceId={deviceId}
+                      familyId={dashboard.family._id}
+                      members={dashboard.members}
+                      onCallSurfaceChange={handleCallSurfaceChange}
+                      onSelectFamily={selectFamilyForIncomingCall}
+                    />
+                  )}
+                </View>
+
+                <View style={[styles.panel, styles.membersPanel, isWide && styles.dashboardSecondary]}>
+                  <View style={styles.panelHeader}>
+                    <View style={styles.panelHeaderCopy}>
+                      <Text style={styles.panelTitle}>Family members</Text>
+                      <Text style={styles.panelText}>Everyone in this household can be called.</Text>
+                    </View>
+                    <View style={styles.inviteBadge}>
+                      <Text style={styles.inviteLabel}>INVITE</Text>
+                      <Text selectable style={styles.inviteCode}>{dashboard.family.inviteCode}</Text>
                     </View>
                   </View>
-                  <Text style={styles.role}>{member.role}</Text>
-                  {currentMember?.role === "owner" && member.userId !== dashboard.currentUserId ? <Pressable disabled={submitting} onPress={() => void perform(() => removeMember({ familyId: dashboard.family._id, userId: member.userId }).then(() => undefined), "Family member removed.")}><Text style={styles.remove}>Remove</Text></Pressable> : null}
+                  <View style={styles.memberList}>
+                    {dashboard.members.map((member) => (
+                      <View key={member.userId} style={styles.member}>
+                        <MemberAvatar
+                          image={member.image}
+                          label={member.name ?? member.email ?? "Family member"}
+                          size={50}
+                        />
+                        <View style={styles.memberIdentity}>
+                          <Text style={styles.memberName}>{member.name ?? member.email ?? "Family member"}</Text>
+                          <Text style={styles.memberDetail}>{member.email ?? "No email available"}</Text>
+                        </View>
+                        <Text style={styles.role}>{member.role}</Text>
+                      </View>
+                    ))}
+                  </View>
                 </View>
-              ))}
-              {currentMember?.role === "owner" ? <Button disabled={submitting} label="Generate new invite code" onPress={() => void perform(async () => { const code = await regenerateInviteCode({ familyId: dashboard.family._id }); setStatus(`New invite code: ${code}`); }, "Invite code updated.")} secondary /> : <Button disabled={submitting} label="Leave family" onPress={() => void perform(() => leaveFamily({ familyId: dashboard.family._id }).then(() => undefined), "You left the family.")} secondary />}
+              </View>
+            ) : (
+              <View style={styles.centeredPanel}>
+                <ActivityIndicator color="#fbbf24" size="large" />
+                <Text style={styles.panelText}>Loading this household…</Text>
+              </View>
+            )}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      <ResponsiveDrawer
+        forceHidden={callSurfaceVisible}
+        onClose={closeHouseholdMenu}
+        open={householdMenuOpen}
+        status={householdMenuOpen ? status : null}
+        title="Household settings"
+      >
+        <View style={styles.drawerSection}>
+          <Text style={styles.drawerKicker}>HOUSEHOLDS</Text>
+          {families === undefined ? (
+            <ActivityIndicator color="#fbbf24" />
+          ) : families.length === 0 ? (
+            <Text style={styles.drawerMuted}>Create or join a household below.</Text>
+          ) : (
+            <View style={styles.householdList}>
+              {families.map((family) => {
+                const isSelected = family._id === activeFamilyId;
+                return (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: isSelected }}
+                    key={family._id}
+                    onPress={() => {
+                      setSelectedFamilyId(family._id);
+                      closeHouseholdMenu();
+                    }}
+                    style={({ pressed }) => [
+                      styles.householdItem,
+                      isSelected && styles.householdItemSelected,
+                      pressed && styles.buttonPressed,
+                    ]}
+                  >
+                    <View style={styles.householdItemCopy}>
+                      <Text style={styles.householdName}>{family.name}</Text>
+                      <Text style={styles.drawerMuted}>Role: {family.role}</Text>
+                    </View>
+                    <Text style={styles.householdInvite}>{family.inviteCode}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
-          </> : <ActivityIndicator color="#fbbf24" size="large" />}
-        </>
-      )}
-      {status ? <View style={styles.toast}><Text style={styles.toastText}>{status}</Text></View> : null}
-    </ScrollView>
+          )}
+        </View>
+
+        {dashboard ? (
+          <View style={styles.drawerSection}>
+            <Text style={styles.drawerKicker}>MANAGE FAMILY ACCESS</Text>
+            <View style={styles.drawerInviteRow}>
+              <Text style={styles.drawerMuted}>Invite code</Text>
+              <Text selectable style={styles.inviteCode}>{dashboard.family.inviteCode}</Text>
+            </View>
+            {dashboard.members.map((member) => (
+              <View key={member.userId} style={styles.drawerMember}>
+                <MemberAvatar
+                  image={member.image}
+                  label={member.name ?? member.email ?? "Family member"}
+                  size={42}
+                />
+                <View style={styles.drawerMemberCopy}>
+                  <Text style={styles.drawerMemberName}>{member.name ?? member.email ?? "Family member"}</Text>
+                  <Text style={styles.drawerMuted}>{member.role}</Text>
+                </View>
+                {currentMember?.role === "owner" && member.userId !== dashboard.currentUserId ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={submitting}
+                    onPress={() => void perform(
+                      () => removeMember({ familyId: dashboard.family._id, userId: member.userId }).then(() => undefined),
+                      "Family member removed.",
+                    )}
+                    style={({ pressed }) => [styles.removeButton, pressed && styles.buttonPressed]}
+                  >
+                    <Text style={styles.remove}>Remove</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ))}
+            {currentMember?.role === "owner" ? (
+              <Button
+                disabled={submitting}
+                label="Generate new invite code"
+                onPress={() => void perform(async () => {
+                  const code = await regenerateInviteCode({ familyId: dashboard.family._id });
+                  setStatus(`New invite code: ${code}`);
+                })}
+                secondary
+              />
+            ) : (
+              <Button
+                disabled={submitting}
+                label="Leave family"
+                onPress={() => void perform(
+                  () => leaveFamily({ familyId: dashboard.family._id }).then(() => undefined),
+                  "You left the family.",
+                )}
+                secondary
+              />
+            )}
+          </View>
+        ) : null}
+
+        <View style={styles.drawerSection}>
+          <Text style={styles.drawerKicker}>CALL SETTINGS</Text>
+          <View style={styles.settingRow}>
+            <View style={styles.settingCopy}>
+              <Text style={styles.settingTitle}>Answer calls automatically</Text>
+              <Text style={styles.drawerMuted}>
+                Connect incoming calls automatically while rinnalla.app is open and visible. Calls received in the background or while the device is locked still require you to answer.
+              </Text>
+            </View>
+            <Switch
+              accessibilityLabel="Answer calls automatically while the app is open"
+              disabled={!autoAnswerCallsLoaded || autoAnswerCallsSaving}
+              onValueChange={(enabled) => void changeAutoAnswerCalls(enabled)}
+              thumbColor={autoAnswerCalls ? "#fef3c7" : "#d6d3d1"}
+              trackColor={{ false: "#57534e", true: "#b45309" }}
+              value={autoAnswerCalls}
+            />
+          </View>
+        </View>
+
+        <View style={styles.drawerSection}>
+          <Text style={styles.drawerKicker}>PROFILE & SETUP</Text>
+          <View style={styles.profileImageRow}>
+            <MemberAvatar
+              image={user?.image}
+              label={user?.name ?? user?.email ?? "Authenticated user"}
+              size={76}
+            />
+            <View style={styles.profileImageControls}>
+              <Text style={styles.settingTitle}>Your picture</Text>
+              <Text style={styles.drawerMuted}>JPEG, PNG, or WebP, up to 5 MB.</Text>
+              <Button
+                disabled={submitting}
+                label={user?.image ? "Update picture" : "Add picture"}
+                onPress={() => void selectProfileImage()}
+                secondary
+              />
+              {user?.image ? (
+                <Button
+                  disabled={submitting}
+                  label="Remove picture"
+                  onPress={() => void removeCurrentProfileImage()}
+                  secondary
+                />
+              ) : null}
+            </View>
+          </View>
+          <Text style={styles.label}>Your name</Text>
+          <TextInput
+            accessibilityLabel="Your name"
+            autoComplete="name"
+            onChangeText={setDisplayName}
+            placeholder={user?.name ?? "How should your family see you?"}
+            placeholderTextColor="#78716c"
+            style={styles.input}
+            value={displayName}
+          />
+          <Button
+            disabled={submitting || displayName.trim().length < 2}
+            label="Save your name"
+            onPress={() => void perform(
+              () => updateName({ name: displayName.trim() }).then(() => { setDisplayName(""); }),
+              "Your name has been updated.",
+            )}
+            secondary
+          />
+
+          <Text style={styles.label}>Create a family</Text>
+          <TextInput
+            accessibilityLabel="Create a family"
+            autoComplete="organization"
+            onChangeText={setFamilyName}
+            placeholder="Korhonen family"
+            placeholderTextColor="#78716c"
+            style={styles.input}
+            value={familyName}
+          />
+          <Button
+            disabled={submitting || !familyName.trim()}
+            label="Create family"
+            onPress={() => void perform(async () => {
+              await createFamily({ name: familyName.trim() });
+              setFamilyName("");
+            }, "Family created.")}
+          />
+
+          <Text style={styles.label}>Join with invite code</Text>
+          <TextInput
+            accessibilityLabel="Join with invite code"
+            autoCapitalize="characters"
+            autoComplete="off"
+            onChangeText={(value) => setInviteCode(value.toUpperCase())}
+            placeholder="ABC123"
+            placeholderTextColor="#78716c"
+            style={styles.input}
+            value={inviteCode}
+          />
+          <Button
+            disabled={submitting || !inviteCode.trim()}
+            label="Join family"
+            onPress={() => void perform(async () => {
+              await joinFamily({ inviteCode: inviteCode.trim() });
+              setInviteCode("");
+            }, "Joined family.")}
+            secondary
+          />
+        </View>
+
+        <Pressable
+          accessibilityRole="button"
+          disabled={submitting}
+          onPress={() => void signOutFromDevice()}
+          style={({ pressed }) => [styles.signOutButton, pressed && styles.buttonPressed]}
+        >
+          <Text style={styles.signOutText}>{submitting ? "Working…" : "Sign out"}</Text>
+        </Pressable>
+      </ResponsiveDrawer>
+
+      {status && !householdMenuOpen ? (
+        <View
+          accessibilityLiveRegion="polite"
+          pointerEvents="none"
+          style={[styles.toast, { bottom: Math.max(insets.bottom + 12, 18) }]}
+        >
+          <Text style={styles.toastText}>{status}</Text>
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -602,6 +1161,7 @@ function AppContent() {
 }
 
 function CallLaunchPrivacyGuard() {
+  const insets = useSafeAreaInsets();
   const shouldInitializeNativeCalling =
     Platform.OS === "android" && process.env.EXPO_PUBLIC_DIRECT_FCM_ENABLED === "true";
   const [isNativeCallStateReady, setIsNativeCallStateReady] = useState(
@@ -629,7 +1189,16 @@ function CallLaunchPrivacyGuard() {
 
   if (isNativeCallStateReady && !isCallLaunchVisible) return null;
   return (
-    <View accessibilityViewIsModal style={styles.callLaunchPrivacyGuard}>
+    <View
+      accessibilityViewIsModal
+      style={[
+        styles.callLaunchPrivacyGuard,
+        {
+          paddingBottom: Math.max(insets.bottom, 24),
+          paddingTop: Math.max(insets.top, 24),
+        },
+      ]}
+    >
       <ActivityIndicator color="#bae6fd" size="large" />
       <Text style={styles.callLaunchPrivacyText}>
         {isCallLaunchVisible ? "Opening your call…" : "Starting rinnalla.app…"}
@@ -640,38 +1209,553 @@ function CallLaunchPrivacyGuard() {
 
 export default function App() {
   if (!convex) {
-    return <SafeAreaView style={styles.safeArea}><StatusBar style="light" /><View style={styles.loading}><Text style={styles.title}>Connect rinnalla.app</Text><Text style={styles.body}>Set EXPO_PUBLIC_CONVEX_URL in apps/mobile/.env.local.</Text></View><CallLaunchPrivacyGuard /></SafeAreaView>;
+    return (
+      <SafeAreaProvider>
+        <SafeAreaView edges={["top", "left", "right"]} style={styles.safeArea}>
+          <StatusBar style="light" />
+          <View style={styles.loading}>
+            <Text accessibilityRole="header" style={styles.title}>Connect rinnalla.app</Text>
+            <Text style={styles.body}>Set EXPO_PUBLIC_CONVEX_URL in apps/mobile/.env.local.</Text>
+          </View>
+          <CallLaunchPrivacyGuard />
+        </SafeAreaView>
+      </SafeAreaProvider>
+    );
   }
-  return <SafeAreaView style={styles.safeArea}><StatusBar style="light" /><ConvexAuthProvider client={convex} storage={tokenStorage}><AppContent /></ConvexAuthProvider><CallLaunchPrivacyGuard /></SafeAreaView>;
+  return (
+    <SafeAreaProvider>
+      <SafeAreaView edges={["top", "left", "right"]} style={styles.safeArea}>
+        <StatusBar style="light" />
+        <ConvexAuthProvider client={convex} storage={tokenStorage}>
+          <AppContent />
+        </ConvexAuthProvider>
+        <CallLaunchPrivacyGuard />
+      </SafeAreaView>
+    </SafeAreaProvider>
+  );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: "#111111" },
-  loading: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "#111111" },
-  callLaunchPrivacyGuard: { alignItems: "center", backgroundColor: "#020617", bottom: 0, elevation: 100, gap: 14, justifyContent: "center", left: 0, padding: 24, position: "absolute", right: 0, top: 0, zIndex: 1000 },
-  callLaunchPrivacyText: { color: "#e2e8f0", fontSize: 16, fontWeight: "600", textAlign: "center" },
-  authContent: { flexGrow: 1, justifyContent: "center", padding: 24, backgroundColor: "#111111" },
-  homeContent: { gap: 16, padding: 20, paddingBottom: 40, backgroundColor: "#111111" },
-  kicker: { color: "#fbbf24", fontSize: 12, fontWeight: "700", letterSpacing: 3, marginBottom: 12 },
-  title: { color: "#fafaf9", fontSize: 36, fontWeight: "700", lineHeight: 42 },
-  homeTitle: { color: "#fafaf9", fontSize: 28, fontWeight: "700", maxWidth: 260 },
-  body: { color: "#d6d3d1", fontSize: 16, lineHeight: 24, marginTop: 14 },
-  segmentedControl: { flexDirection: "row", gap: 8, marginTop: 28 },
-  segment: { borderColor: "#44403c", borderRadius: 18, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 10 },
-  segmentSelected: { backgroundColor: "#fbbf24", borderColor: "#fbbf24" },
-  segmentText: { color: "#d6d3d1", fontWeight: "600" },
-  segmentSelectedText: { color: "#1c1917", fontWeight: "700" },
-  form: { gap: 10, marginTop: 24 },
-  label: { color: "#d6d3d1", fontSize: 14, fontWeight: "600", marginTop: 8 },
-  input: { backgroundColor: "#0c0a09", borderColor: "#44403c", borderRadius: 16, borderWidth: 1, color: "#fafaf9", fontSize: 16, paddingHorizontal: 16, paddingVertical: 14 },
-  button: { alignItems: "center", borderRadius: 16, marginTop: 10, paddingHorizontal: 16, paddingVertical: 15 },
-  primaryButton: { backgroundColor: "#fbbf24" }, secondaryButton: { borderColor: "#57534e", borderWidth: 1 },
-  primaryButtonText: { color: "#1c1917", fontSize: 16, fontWeight: "700" }, secondaryButtonText: { color: "#f5f5f4", fontSize: 16, fontWeight: "600" },
-  buttonPressed: { opacity: 0.82 }, buttonDisabled: { opacity: 0.5 }, toast: { alignSelf: "center", backgroundColor: "#292524", borderColor: "#fbbf24", borderRadius: 16, borderWidth: 1, bottom: 18, left: 20, paddingHorizontal: 16, paddingVertical: 12, position: "absolute", right: 20, shadowColor: "#000", shadowOpacity: 0.35, shadowRadius: 12, zIndex: 10 }, toastText: { color: "#fef3c7", fontSize: 14, lineHeight: 20, textAlign: "center" },
-  headerRow: { alignItems: "flex-start", flexDirection: "row", justifyContent: "space-between" }, link: { color: "#fcd34d", fontWeight: "600", paddingTop: 18 },
-  panel: { backgroundColor: "#1c1917", borderColor: "#44403c", borderRadius: 24, borderWidth: 1, padding: 18 },
-  panelTitle: { color: "#fafaf9", fontSize: 20, fontWeight: "700" }, panelText: { color: "#d6d3d1", fontSize: 14, lineHeight: 20, marginTop: 6 },
-  or: { color: "#a8a29e", marginTop: 12, textAlign: "center" }, familyTabs: { flexGrow: 0 }, familyTab: { borderColor: "#44403c", borderRadius: 18, borderWidth: 1, marginRight: 8, paddingHorizontal: 14, paddingVertical: 10 }, familyTabSelected: { backgroundColor: "#fbbf24", borderColor: "#fbbf24" }, familyTabText: { color: "#d6d3d1", fontWeight: "600" }, familyTabSelectedText: { color: "#1c1917", fontWeight: "700" },
-  panelHeader: { alignItems: "flex-start", flexDirection: "row", justifyContent: "space-between", marginBottom: 12 }, inviteCode: { color: "#fcd34d", fontFamily: "monospace", fontSize: 16, fontWeight: "700" },
-  member: { borderTopColor: "#44403c", borderTopWidth: 1, gap: 8, paddingVertical: 14 }, memberIdentity: { flexDirection: "row", gap: 10 }, memberName: { color: "#fafaf9", fontSize: 16, fontWeight: "600" }, memberDetail: { color: "#a8a29e", fontSize: 13, marginTop: 2 }, role: { color: "#d6d3d1", fontSize: 12, textTransform: "uppercase" }, remove: { color: "#fda4af", fontSize: 13, fontWeight: "700" },
+  safeArea: {
+    backgroundColor: "#111111",
+    flex: 1,
+  },
+  screen: {
+    backgroundColor: "#111111",
+    flex: 1,
+  },
+  loading: {
+    backgroundColor: "#111111",
+    flex: 1,
+    justifyContent: "center",
+    padding: 24,
+  },
+  callLaunchPrivacyGuard: {
+    alignItems: "center",
+    backgroundColor: "#020617",
+    bottom: 0,
+    elevation: 100,
+    gap: 14,
+    justifyContent: "center",
+    left: 0,
+    paddingHorizontal: 24,
+    position: "absolute",
+    right: 0,
+    top: 0,
+    zIndex: 1000,
+  },
+  callLaunchPrivacyText: {
+    color: "#e2e8f0",
+    fontSize: 16,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  authContent: {
+    backgroundColor: "#111111",
+    flexGrow: 1,
+    justifyContent: "center",
+    paddingHorizontal: 20,
+  },
+  authContentTablet: {
+    paddingHorizontal: 32,
+  },
+  authContentCompactLandscape: {
+    justifyContent: "flex-start",
+  },
+  authCard: {
+    alignSelf: "center",
+    maxWidth: 620,
+    width: "100%",
+  },
+  authCardWide: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    gap: 44,
+    maxWidth: 960,
+  },
+  authIntro: {
+    flex: 1,
+    minWidth: 0,
+  },
+  authControls: {
+    flex: 1,
+    minWidth: 0,
+    width: "100%",
+  },
+  homeContent: {
+    backgroundColor: "#111111",
+    flexGrow: 1,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+  },
+  homeContentCompact: {
+    paddingTop: 12,
+  },
+  homeFrame: {
+    alignSelf: "center",
+    gap: 18,
+    maxWidth: 1120,
+    width: "100%",
+  },
+  kicker: {
+    color: "#fbbf24",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 3,
+    marginBottom: 10,
+  },
+  title: {
+    color: "#fafaf9",
+    fontSize: 36,
+    fontWeight: "700",
+    lineHeight: 42,
+  },
+  titleCompact: {
+    fontSize: 30,
+    lineHeight: 35,
+  },
+  homeTitle: {
+    color: "#fafaf9",
+    flexShrink: 1,
+    fontSize: 30,
+    fontWeight: "700",
+    lineHeight: 36,
+  },
+  body: {
+    color: "#d6d3d1",
+    fontSize: 16,
+    lineHeight: 24,
+    marginTop: 14,
+  },
+  segmentedControl: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 24,
+  },
+  segment: {
+    alignItems: "center",
+    borderColor: "#44403c",
+    borderRadius: 18,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 46,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  segmentSelected: {
+    backgroundColor: "#fbbf24",
+    borderColor: "#fbbf24",
+  },
+  segmentText: {
+    color: "#d6d3d1",
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  segmentSelectedText: {
+    color: "#1c1917",
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  form: {
+    gap: 10,
+    marginTop: 20,
+  },
+  label: {
+    color: "#d6d3d1",
+    fontSize: 14,
+    fontWeight: "600",
+    marginTop: 8,
+  },
+  input: {
+    backgroundColor: "#0c0a09",
+    borderColor: "#44403c",
+    borderRadius: 16,
+    borderWidth: 1,
+    color: "#fafaf9",
+    fontSize: 16,
+    minHeight: 52,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+  },
+  button: {
+    alignItems: "center",
+    borderRadius: 16,
+    justifyContent: "center",
+    marginTop: 10,
+    minHeight: 52,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+  },
+  primaryButton: {
+    backgroundColor: "#fbbf24",
+  },
+  secondaryButton: {
+    borderColor: "#57534e",
+    borderWidth: 1,
+  },
+  primaryButtonText: {
+    color: "#1c1917",
+    fontSize: 16,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  secondaryButtonText: {
+    color: "#f5f5f4",
+    fontSize: 16,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  buttonPressed: {
+    opacity: 0.82,
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+  },
+  toast: {
+    alignSelf: "center",
+    backgroundColor: "#292524",
+    borderColor: "#fbbf24",
+    borderRadius: 16,
+    borderWidth: 1,
+    left: 20,
+    maxWidth: 560,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    position: "absolute",
+    right: 20,
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    zIndex: 50,
+  },
+  toastText: {
+    color: "#fef3c7",
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: "center",
+  },
+  headerRow: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  headerCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  userMenuRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 6,
+  },
+  userName: {
+    color: "#d6d3d1",
+    flexShrink: 1,
+    fontSize: 15,
+    lineHeight: 21,
+  },
+  menuButton: {
+    alignItems: "center",
+    borderColor: "#57534e",
+    borderRadius: 18,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: "center",
+    width: 44,
+  },
+  menuButtonText: {
+    color: "#fcd34d",
+    fontSize: 23,
+    lineHeight: 27,
+  },
+  panel: {
+    backgroundColor: "#1c1917",
+    borderColor: "#44403c",
+    borderRadius: 24,
+    borderWidth: 1,
+    padding: 18,
+  },
+  centeredPanel: {
+    alignItems: "center",
+    backgroundColor: "#1c1917",
+    borderColor: "#44403c",
+    borderRadius: 24,
+    borderWidth: 1,
+    gap: 10,
+    justifyContent: "center",
+    minHeight: 160,
+    padding: 20,
+  },
+  emptyHouseholdPanel: {
+    alignSelf: "center",
+    backgroundColor: "#1c1917",
+    borderColor: "#44403c",
+    borderRadius: 24,
+    borderWidth: 1,
+    maxWidth: 620,
+    padding: 20,
+    width: "100%",
+  },
+  panelTitle: {
+    color: "#fafaf9",
+    fontSize: 20,
+    fontWeight: "700",
+    lineHeight: 26,
+  },
+  panelText: {
+    color: "#d6d3d1",
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 6,
+  },
+  dashboardGrid: {
+    gap: 18,
+  },
+  dashboardGridWide: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+  },
+  dashboardPrimary: {
+    minWidth: 0,
+    width: "100%",
+  },
+  dashboardPrimaryWide: {
+    flex: 1.4,
+    width: "auto",
+  },
+  dashboardSecondary: {
+    flex: 1,
+    width: "auto",
+  },
+  membersPanel: {
+    minWidth: 0,
+    width: "100%",
+  },
+  panelHeader: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  panelHeaderCopy: {
+    flex: 1,
+    minWidth: 180,
+  },
+  inviteBadge: {
+    alignItems: "flex-end",
+    backgroundColor: "#292524",
+    borderRadius: 12,
+    gap: 2,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  inviteLabel: {
+    color: "#a8a29e",
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1.6,
+  },
+  inviteCode: {
+    color: "#fcd34d",
+    fontFamily: "monospace",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  memberList: {
+    gap: 10,
+  },
+  member: {
+    alignItems: "flex-start",
+    borderTopColor: "#44403c",
+    borderTopWidth: 1,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    justifyContent: "space-between",
+    paddingVertical: 14,
+  },
+  memberIdentity: {
+    flex: 1,
+    minWidth: 160,
+  },
+  memberName: {
+    color: "#fafaf9",
+    fontSize: 16,
+    fontWeight: "600",
+    lineHeight: 22,
+  },
+  memberDetail: {
+    color: "#a8a29e",
+    fontSize: 13,
+    marginTop: 2,
+  },
+  role: {
+    borderColor: "#57534e",
+    borderRadius: 12,
+    borderWidth: 1,
+    color: "#d6d3d1",
+    fontSize: 11,
+    overflow: "hidden",
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    textTransform: "uppercase",
+  },
+  drawerSection: {
+    backgroundColor: "#1c1917",
+    borderColor: "#44403c",
+    borderRadius: 20,
+    borderWidth: 1,
+    gap: 10,
+    padding: 15,
+  },
+  drawerKicker: {
+    color: "#a8a29e",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 2.2,
+  },
+  drawerMuted: {
+    color: "#a8a29e",
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  settingRow: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    gap: 14,
+    justifyContent: "space-between",
+  },
+  settingCopy: {
+    flex: 1,
+    gap: 4,
+    minWidth: 0,
+  },
+  settingTitle: {
+    color: "#fafaf9",
+    fontSize: 15,
+    fontWeight: "600",
+    lineHeight: 21,
+  },
+  profileImageRow: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    gap: 14,
+  },
+  profileImageControls: {
+    flex: 1,
+    minWidth: 0,
+  },
+  householdList: {
+    gap: 10,
+  },
+  householdItem: {
+    alignItems: "center",
+    backgroundColor: "#0c0a09",
+    borderColor: "#44403c",
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 10,
+    justifyContent: "space-between",
+    minHeight: 64,
+    padding: 12,
+  },
+  householdItemSelected: {
+    backgroundColor: "#422006",
+    borderColor: "#fbbf24",
+  },
+  householdItemCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  householdName: {
+    color: "#fafaf9",
+    fontSize: 15,
+    fontWeight: "700",
+    lineHeight: 20,
+  },
+  householdInvite: {
+    color: "#fcd34d",
+    flexShrink: 0,
+    fontFamily: "monospace",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  drawerInviteRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "space-between",
+  },
+  drawerMember: {
+    alignItems: "center",
+    borderTopColor: "#44403c",
+    borderTopWidth: 1,
+    flexDirection: "row",
+    gap: 10,
+    justifyContent: "space-between",
+    paddingTop: 10,
+  },
+  drawerMemberCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  drawerMemberName: {
+    color: "#fafaf9",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  removeButton: {
+    borderColor: "#fb7185",
+    borderRadius: 12,
+    borderWidth: 1,
+    minHeight: 40,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  remove: {
+    color: "#fda4af",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  signOutButton: {
+    alignItems: "center",
+    borderColor: "#78716c",
+    borderRadius: 16,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 52,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+  },
+  signOutText: {
+    color: "#fafaf9",
+    fontSize: 16,
+    fontWeight: "700",
+  },
 });

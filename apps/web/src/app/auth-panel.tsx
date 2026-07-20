@@ -7,24 +7,42 @@ import {
   Authenticated,
   AuthLoading,
   Unauthenticated,
+  useAction,
   useConvexAuth,
   useMutation,
   useQuery,
 } from "convex/react";
-import { FormEvent, useEffect, useState } from "react";
+import {
+  ChangeEvent,
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { FamilyCallPanel } from "./family-call-panel";
+import { MemberAvatar } from "./member-avatar";
 
 type Mode = "signIn" | "signUp";
 type ResetStep = "request" | "verify" | null;
 
 const ANDROID_DEVELOPMENT_APK_URL =
   "https://github.com/AkseliKorhonen/VaariTablet/releases/download/development/rinnalla-development.apk";
+const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
+const PROFILE_IMAGE_CONTENT_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
 
 export function AuthPanel() {
   const [mode, setMode] = useState<Mode>("signIn");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [emailVerificationCode, setEmailVerificationCode] = useState("");
+  const [emailVerificationPending, setEmailVerificationPending] = useState(false);
   const [resetStep, setResetStep] = useState<ResetStep>(null);
   const [resetCode, setResetCode] = useState("");
   const [familyName, setFamilyName] = useState("");
@@ -34,8 +52,13 @@ export function AuthPanel() {
   );
   const [status, setStatus] = useState<string | null>(null);
   const [householdPanelOpen, setHouseholdPanelOpen] = useState(false);
-  const [householdsOpen, setHouseholdsOpen] = useState(false);
+  const [householdPanelModal, setHouseholdPanelModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const householdPanelRef = useRef<HTMLElement>(null);
+  const householdPanelButtonRef = useRef<HTMLButtonElement>(null);
+  const householdPanelCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const profileImageInputRef = useRef<HTMLInputElement>(null);
+  const restoreHouseholdPanelFocusRef = useRef(true);
   const { signIn, signOut } = useAuthActions();
   const { isAuthenticated } = useConvexAuth();
   const user = useQuery(api.users.current);
@@ -49,6 +72,13 @@ export function AuthPanel() {
   const removeMember = useMutation(api.families.removeMember);
   const leaveFamily = useMutation(api.families.leave);
   const updateName = useMutation(api.users.updateName);
+  const generateProfileImageUploadUrl = useMutation(
+    api.users.generateProfileImageUploadUrl,
+  );
+  const updateProfileImage = useAction(
+    api.profileImageActions.updateProfileImage,
+  );
+  const removeProfileImage = useMutation(api.users.removeProfileImage);
   const activeFamilyId =
     families && families.length > 0
       ? selectedFamilyId && families.some((family) => family._id === selectedFamilyId)
@@ -66,6 +96,88 @@ export function AuthPanel() {
     return () => window.clearTimeout(timeout);
   }, [status]);
 
+  useEffect(() => {
+    const desktopMedia = window.matchMedia("(min-width: 1280px)");
+    const syncDrawerSemantics = () => {
+      setHouseholdPanelModal(!desktopMedia.matches);
+    };
+
+    syncDrawerSemantics();
+    desktopMedia.addEventListener("change", syncDrawerSemantics);
+    return () => desktopMedia.removeEventListener("change", syncDrawerSemantics);
+  }, []);
+
+  useEffect(() => {
+    if (!householdPanelOpen) return;
+
+    const desktopMedia = window.matchMedia("(min-width: 1280px)");
+    const panelButton = householdPanelButtonRef.current;
+    const originalOverflow = document.body.style.overflow;
+    const syncDrawerMode = () => {
+      if (desktopMedia.matches) {
+        document.body.style.overflow = originalOverflow;
+      } else {
+        document.body.style.overflow = "hidden";
+        householdPanelCloseButtonRef.current?.focus();
+      }
+    };
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setHouseholdPanelOpen(false);
+      }
+    };
+
+    syncDrawerMode();
+    desktopMedia.addEventListener("change", syncDrawerMode);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      desktopMedia.removeEventListener("change", syncDrawerMode);
+      window.removeEventListener("keydown", closeOnEscape);
+      document.body.style.overflow = originalOverflow;
+      if (restoreHouseholdPanelFocusRef.current) panelButton?.focus();
+      restoreHouseholdPanelFocusRef.current = true;
+    };
+  }, [householdPanelOpen]);
+
+  const keepFocusInsideHouseholdPanel = (
+    event: ReactKeyboardEvent<HTMLElement>,
+  ) => {
+    if (
+      event.key !== "Tab" ||
+      window.matchMedia("(min-width: 1280px)").matches
+    ) {
+      return;
+    }
+
+    const panel = householdPanelRef.current;
+    if (!panel) return;
+
+    const focusableElements = Array.from(
+      panel.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    const first = focusableElements[0];
+    const last = focusableElements.at(-1);
+
+    if (!first || !last) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const handleCallSurfaceChange = useCallback((visible: boolean) => {
+    if (visible && householdPanelOpen) {
+      restoreHouseholdPanelFocusRef.current = false;
+      setHouseholdPanelOpen(false);
+    }
+  }, [householdPanelOpen]);
+
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSubmitting(true);
@@ -81,9 +193,64 @@ export function AuthPanel() {
 
       if (result.signingIn) {
         setStatus(mode === "signUp" ? "Account created." : "Signed in.");
+      } else {
+        setPassword("");
+        setEmailVerificationCode("");
+        setEmailVerificationPending(true);
+        setStatus(
+          mode === "signUp"
+            ? "Account created. Enter the verification code from your email."
+            : "Enter the verification code we sent to your email.",
+        );
       }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Authentication failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onVerifyEmail = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setStatus(null);
+
+    try {
+      const result = await signIn("password", {
+        code: emailVerificationCode,
+        email,
+        flow: "email-verification",
+      });
+      if (!result.signingIn) {
+        throw new Error("That verification code could not be verified.");
+      }
+      setEmailVerificationCode("");
+      setEmailVerificationPending(false);
+      setStatus("Email verified. You are now signed in.");
+    } catch (error) {
+      setStatus(
+        error instanceof Error
+          ? error.message
+          : "That verification code could not be verified.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onResendEmailVerification = async () => {
+    setSubmitting(true);
+    setStatus(null);
+    try {
+      await signIn("password", { email, flow: "email-verification" });
+      setEmailVerificationCode("");
+      setStatus("We sent a new verification code to your email.");
+    } catch (error) {
+      setStatus(
+        error instanceof Error
+          ? error.message
+          : "Could not send a new verification code.",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -98,6 +265,60 @@ export function AuthPanel() {
       setStatus("Your name has been updated.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not update your name.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onProfileImageSelected = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    const contentType = file.type === "image/jpg" ? "image/jpeg" : file.type;
+    if (!PROFILE_IMAGE_CONTENT_TYPES.has(contentType)) {
+      input.value = "";
+      setStatus("Choose a JPEG, PNG, or WebP image.");
+      return;
+    }
+    if (file.size > MAX_PROFILE_IMAGE_BYTES) {
+      input.value = "";
+      setStatus("Profile pictures must be 5 MB or smaller.");
+      return;
+    }
+
+    setSubmitting(true);
+    setStatus(null);
+    try {
+      const uploadUrl = await generateProfileImageUploadUrl({});
+      const response = await fetch(uploadUrl, {
+        body: file,
+        headers: { "Content-Type": contentType },
+        method: "POST",
+      });
+      if (!response.ok) throw new Error("Could not upload your picture.");
+      const result = await response.json() as { storageId?: Id<"_storage"> };
+      if (!result.storageId) throw new Error("The upload did not return a file ID.");
+      await updateProfileImage({ storageId: result.storageId });
+      setStatus("Your picture has been updated.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update your picture.");
+    } finally {
+      input.value = "";
+      setSubmitting(false);
+    }
+  };
+
+  const onRemoveProfileImage = async () => {
+    setSubmitting(true);
+    setStatus(null);
+    try {
+      await removeProfileImage({});
+      setStatus("Your picture has been removed.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not remove your picture.");
     } finally {
       setSubmitting(false);
     }
@@ -248,11 +469,11 @@ export function AuthPanel() {
   };
 
   return (
-    <div className="w-full max-w-5xl rounded-[2rem] border border-stone-800 bg-stone-900/95 p-8 shadow-2xl shadow-black/30 backdrop-blur">
+    <div className="w-full min-w-0 max-w-7xl rounded-2xl border border-stone-800 bg-stone-900/95 p-4 shadow-2xl shadow-black/30 sm:rounded-[2rem] sm:p-6 lg:p-8">
       <p className="text-sm uppercase tracking-[0.35em] text-amber-300">
         rinnalla.app
       </p>
-      <h1 className="mt-5 text-4xl font-semibold tracking-tight text-stone-50">
+      <h1 className="mt-5 text-3xl font-semibold tracking-tight text-stone-50 sm:text-4xl">
         Stay close, even from afar.
       </h1>
       <p className="mt-3 text-sm leading-6 text-stone-300">
@@ -260,7 +481,7 @@ export function AuthPanel() {
       </p>
 
       <div className="mt-6 flex flex-col gap-4 rounded-2xl border border-amber-300/20 bg-amber-300/[0.06] p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           <span
             aria-hidden="true"
             className="grid size-11 shrink-0 place-items-center rounded-xl bg-amber-300/10 text-amber-200"
@@ -282,13 +503,13 @@ export function AuthPanel() {
               <circle cx="14" cy="12" fill="currentColor" r=".75" />
             </svg>
           </span>
-          <div>
+          <div className="min-w-0">
             <p className="text-sm font-semibold text-stone-100">
               Android development build
             </p>
             <p
               id="android-build-description"
-              className="mt-1 text-xs leading-5 text-stone-400"
+              className="mt-1 break-words text-xs leading-5 text-stone-400"
             >
               For testing rinnalla.app on an Android phone or tablet.
             </p>
@@ -297,7 +518,7 @@ export function AuthPanel() {
         <a
           aria-describedby="android-build-description"
           aria-label="Download the rinnalla.app Android development APK"
-          className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-amber-300 px-4 py-2.5 text-sm font-semibold text-stone-950 transition hover:bg-amber-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200"
+          className="inline-flex min-h-11 w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-amber-300 px-4 py-2.5 text-sm font-semibold text-stone-950 transition hover:bg-amber-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 sm:w-auto"
           href={ANDROID_DEVELOPMENT_APK_URL}
         >
           Download APK
@@ -324,9 +545,10 @@ export function AuthPanel() {
       </AuthLoading>
 
       <Unauthenticated>
-        {resetStep === null ? <div className="mt-8 flex gap-3">
+        <div className="max-w-xl">
+        {resetStep === null && !emailVerificationPending ? <div className="mt-8 grid grid-cols-2 gap-3 sm:flex">
           <button
-            className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+            className={`min-h-11 rounded-full px-3 py-2 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 sm:px-4 ${
               mode === "signIn"
                 ? "bg-amber-300 text-stone-950"
                 : "border border-stone-700 text-stone-300"
@@ -337,7 +559,7 @@ export function AuthPanel() {
             Sign In
           </button>
           <button
-            className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+            className={`min-h-11 rounded-full px-3 py-2 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 sm:px-4 ${
               mode === "signUp"
                 ? "bg-amber-300 text-stone-950"
                 : "border border-stone-700 text-stone-300"
@@ -349,7 +571,56 @@ export function AuthPanel() {
           </button>
         </div> : null}
 
-        {resetStep === null ? <form className="mt-6 space-y-4" onSubmit={onSubmit}>
+        {emailVerificationPending ? (
+          <form className="mt-8 space-y-4" onSubmit={onVerifyEmail}>
+            <div>
+              <h2 className="text-xl font-semibold text-stone-50">Verify your email</h2>
+              <p className="mt-2 text-sm leading-6 text-stone-300">
+                Enter the eight-digit code sent to <span className="break-all font-medium text-stone-100">{email}</span>. The code expires in 15 minutes.
+              </p>
+            </div>
+            <label className="block">
+              <span className="mb-2 block text-sm text-stone-300">Verification code</span>
+              <input
+                autoComplete="one-time-code"
+                autoFocus
+                className="w-full rounded-2xl border border-stone-700 bg-stone-950 px-4 py-3 text-stone-50 outline-none transition focus:border-amber-300"
+                id="email-verification-code"
+                inputMode="numeric"
+                maxLength={8}
+                onChange={(event) => setEmailVerificationCode(event.target.value.replace(/\D/g, ""))}
+                required
+                value={emailVerificationCode}
+              />
+            </label>
+            <button
+              className="w-full rounded-2xl bg-amber-300 px-4 py-3 font-medium text-stone-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={submitting || emailVerificationCode.length !== 8}
+              type="submit"
+            >
+              {submitting ? "Verifying..." : "Verify email"}
+            </button>
+            <button
+              className="w-full text-sm text-amber-200 underline underline-offset-4 transition hover:text-amber-100 disabled:opacity-60"
+              disabled={submitting}
+              onClick={() => void onResendEmailVerification()}
+              type="button"
+            >
+              Send a new code
+            </button>
+            <button
+              className="w-full text-sm text-stone-300 underline underline-offset-4"
+              onClick={() => {
+                setEmailVerificationCode("");
+                setEmailVerificationPending(false);
+                setMode("signIn");
+              }}
+              type="button"
+            >
+              Back to sign in
+            </button>
+          </form>
+        ) : resetStep === null ? <form className="mt-6 space-y-4" onSubmit={onSubmit}>
           {mode === "signUp" ? <label className="block">
             <span className="mb-2 block text-sm text-stone-300">Your name</span>
             <input autoComplete="name" className="w-full rounded-2xl border border-stone-700 bg-stone-950 px-4 py-3 text-stone-50 outline-none transition focus:border-amber-300" id="auth-name" minLength={2} name="name" onChange={(event) => setDisplayName(event.target.value)} required value={displayName} />
@@ -493,30 +764,58 @@ export function AuthPanel() {
             </button>
           </form>
         )}
+        </div>
       </Unauthenticated>
 
       <Authenticated>
-        <div className={`mt-8 grid gap-6 ${householdPanelOpen ? "lg:grid-cols-[1.65fr_1fr]" : ""}`}>
-          <section className="rounded-3xl border border-emerald-500/20 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.18),_transparent_35%),linear-gradient(180deg,_rgba(28,25,23,0.96),_rgba(12,10,9,0.96))] p-6">
+        <div
+          className={`mt-8 grid min-w-0 gap-6 ${
+            householdPanelOpen
+              ? "xl:grid-cols-[minmax(0,1.75fr)_minmax(20rem,1fr)]"
+              : ""
+          }`}
+        >
+          <section className="min-w-0 rounded-3xl border border-emerald-500/20 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.18),_transparent_35%),linear-gradient(180deg,_rgba(28,25,23,0.96),_rgba(12,10,9,0.96))] p-4 sm:p-6">
             <div className="flex flex-col gap-5 border-b border-stone-800 pb-6 sm:flex-row sm:items-start sm:justify-between">
-              <div>
+              <div className="min-w-0">
                 <p className="text-sm uppercase tracking-[0.32em] text-emerald-300">
                   Family calls
                 </p>
-                <h2 className="mt-3 text-3xl font-semibold tracking-tight text-stone-50">
+                <h2 className="mt-3 break-words text-2xl font-semibold tracking-tight text-stone-50 sm:text-3xl">
                   {dashboard?.family.name ?? "Your household"}
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-6 text-stone-300">
                   Call anyone in your household, whenever you need to connect.
                 </p>
               </div>
-              <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3">
+              <div className="w-full min-w-0 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 sm:w-auto sm:max-w-sm">
                 <p className="text-xs uppercase tracking-[0.28em] text-emerald-200">
                   You
                 </p>
                 <div className="mt-2 flex items-center justify-between gap-3">
-                  <p className="text-base font-medium text-stone-50">{user?.name ?? user?.email ?? "Authenticated user"}</p>
-                  <button aria-label={householdPanelOpen ? "Close household settings" : "Open household settings"} className="rounded-lg px-2 py-1 text-2xl leading-none text-amber-100 hover:bg-emerald-400/10" onClick={() => setHouseholdPanelOpen((open) => !open)} title="Household settings" type="button">{householdPanelOpen ? "›" : "‹"}</button>
+                  <MemberAvatar
+                    className="size-11"
+                    image={user?.image}
+                    label={user?.name ?? user?.email ?? "Authenticated user"}
+                  />
+                  <p className="min-w-0 break-words text-base font-medium text-stone-50">
+                    {user?.name ?? user?.email ?? "Authenticated user"}
+                  </p>
+                  <button
+                    ref={householdPanelButtonRef}
+                    aria-controls="household-settings-panel"
+                    aria-expanded={householdPanelOpen}
+                    aria-label={householdPanelOpen ? "Close household settings" : "Open household settings"}
+                    className="grid size-11 shrink-0 place-items-center rounded-xl text-amber-100 transition hover:bg-emerald-400/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200"
+                    onClick={() => setHouseholdPanelOpen((open) => !open)}
+                    title="Household settings"
+                    type="button"
+                  >
+                    <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M9.6 3.8 10 2h4l.4 1.8a8.4 8.4 0 0 1 1.6.9l1.8-.6 2 3.5-1.4 1.2c.1.5.2 1.1.2 1.7s-.1 1.2-.2 1.7l1.4 1.2-2 3.5-1.8-.6a8.4 8.4 0 0 1-1.6.9L14 19h-4l-.4-1.8a8.4 8.4 0 0 1-1.6-.9l-1.8.6-2-3.5 1.4-1.2a7.6 7.6 0 0 1 0-3.4L4.2 7.6l2-3.5 1.8.6a8.4 8.4 0 0 1 1.6-.9Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" />
+                      <circle cx="12" cy="10.5" r="2.5" stroke="currentColor" strokeWidth="1.6" />
+                    </svg>
+                  </button>
                 </div>
               </div>
             </div>
@@ -544,49 +843,31 @@ export function AuthPanel() {
                     currentUserId={dashboard.currentUserId}
                     familyId={dashboard.family._id}
                     members={dashboard.members}
+                    onCallSurfaceChange={handleCallSurfaceChange}
                   />
-
-                  <div className="hidden">
-                    <button className="rounded-xl border border-stone-700 bg-stone-950 px-4 py-2 text-sm font-medium text-stone-100 hover:border-stone-500" onClick={() => setHouseholdsOpen((open) => !open)} type="button">{householdsOpen ? "Close households" : `Households · ${dashboard.family.name}`}</button>
-                    {householdsOpen ? <div className="mt-4 flex flex-wrap gap-3 rounded-2xl border border-stone-800 bg-stone-950/70 p-4">
-                    {families.map((family) => {
-                      const isSelected = family._id === activeFamilyId;
-                      return (
-                        <button
-                          key={family._id}
-                          className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                            isSelected
-                              ? "bg-amber-300 text-stone-950"
-                              : "border border-stone-700 text-stone-300 hover:border-stone-500"
-                          }`}
-                          onClick={() => setSelectedFamilyId(family._id)}
-                          type="button"
-                        >
-                          {family.name}
-                        </button>
-                      );
-                    })}
-                    </div> : null}
-                  </div>
 
                   <div className="grid gap-4 md:grid-cols-2">
                     {dashboard.members.map((member) => (
                       <article
                         key={member.userId}
-                        className="rounded-3xl border border-stone-800 bg-stone-950/70 px-5 py-4 transition"
+                        className="min-w-0 rounded-3xl border border-stone-800 bg-stone-950/70 px-4 py-4 transition sm:px-5"
                       >
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
-                            <div className="flex items-center gap-3">
-                              <p className="text-lg font-semibold text-stone-50">
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                          <div className="flex min-w-0 flex-1 items-center gap-3">
+                            <MemberAvatar
+                              image={member.image}
+                              label={member.name ?? member.email ?? "Family member"}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="break-words text-lg font-semibold text-stone-50">
                                 {member.name ?? member.email ?? "Family member"}
                               </p>
+                              <p className="mt-1 break-all text-sm text-stone-400">
+                                {member.email ?? "No email available"}
+                              </p>
                             </div>
-                            <p className="mt-2 text-sm text-stone-400">
-                              {member.email ?? "No email available"}
-                            </p>
                           </div>
-                          <p className="rounded-full border border-stone-700 px-3 py-1 text-xs uppercase tracking-[0.24em] text-stone-300">
+                          <p className="shrink-0 rounded-full border border-stone-700 px-3 py-1 text-xs uppercase tracking-[0.24em] text-stone-300">
                             {member.role}
                           </p>
                         </div>
@@ -596,7 +877,7 @@ export function AuthPanel() {
                         )?.role === "owner" &&
                         member.userId !== dashboard.currentUserId ? (
                           <button
-                            className="mt-4 rounded-xl border border-rose-400/30 px-3 py-2 text-xs font-medium text-rose-100 transition hover:border-rose-300 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="mt-4 min-h-11 w-full rounded-xl border border-rose-400/30 px-3 py-2 text-xs font-medium text-rose-100 transition hover:border-rose-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-200 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                             disabled={submitting}
                             onClick={() => onRemoveMember(member.userId)}
                             type="button"
@@ -612,8 +893,23 @@ export function AuthPanel() {
             </div>
           </section>
 
-          <aside className={householdPanelOpen ? "household-panel-enter space-y-6" : "hidden"}>
-            <button className="w-full rounded-2xl border border-stone-600 px-4 py-3 text-sm font-medium text-stone-100 transition hover:border-stone-400 disabled:opacity-60" disabled={submitting} onClick={onSignOut} type="button">Sign out</button>
+          {householdPanelOpen ? (
+            <>
+              <button aria-label="Close household settings" className="household-backdrop-enter fixed inset-0 z-40 bg-black/65 backdrop-blur-[2px] xl:hidden" onClick={() => setHouseholdPanelOpen(false)} type="button" />
+              <aside
+                ref={householdPanelRef}
+                aria-labelledby="household-settings-title"
+                aria-modal={householdPanelModal || undefined}
+                className="household-panel-enter household-settings-drawer fixed inset-y-0 right-0 z-50 w-[min(26rem,calc(100%-0.75rem))] space-y-6 overflow-y-auto overscroll-contain border-l border-stone-700 bg-stone-900 p-4 shadow-2xl shadow-black/50 sm:w-[26rem] sm:p-6 xl:static xl:z-auto xl:w-auto xl:overflow-visible xl:border-0 xl:bg-transparent xl:p-0 xl:shadow-none"
+                id="household-settings-panel"
+                onKeyDown={keepFocusInsideHouseholdPanel}
+                role={householdPanelModal ? "dialog" : "region"}
+              >
+                <div className="flex items-center justify-between gap-4 xl:hidden">
+                  <h2 className="text-xl font-semibold text-stone-50" id="household-settings-title">Household settings</h2>
+                  <button ref={householdPanelCloseButtonRef} aria-label="Close household settings" className="grid size-11 shrink-0 place-items-center rounded-xl border border-stone-700 text-2xl text-stone-200 transition hover:border-stone-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200" onClick={() => setHouseholdPanelOpen(false)} type="button"><span aria-hidden="true">×</span></button>
+                </div>
+                <button className="min-h-11 w-full rounded-2xl border border-stone-600 px-4 py-3 text-sm font-medium text-stone-100 transition hover:border-stone-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 disabled:opacity-60" disabled={submitting} onClick={onSignOut} type="button">Sign out</button>
             <div className="rounded-3xl border border-stone-800 bg-stone-950/70 p-5">
               <p className="text-sm uppercase tracking-[0.3em] text-stone-400">
                 Households
@@ -627,37 +923,25 @@ export function AuthPanel() {
                   </p>
                 ) : (
                   families.map((family) => (
-                    <div
+                    <article
                       key={family._id}
-                      className={`w-full rounded-2xl border px-4 py-4 text-left ${family._id === activeFamilyId ? "border-amber-300/60 bg-amber-300/10" : "border-stone-800 bg-stone-900 hover:border-stone-600"}`}
-                      onClick={() => setSelectedFamilyId(family._id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") setSelectedFamilyId(family._id);
-                      }}
-                      role="button"
-                      tabIndex={0}
+                      className={`w-full min-w-0 rounded-2xl border p-2 text-left ${family._id === activeFamilyId ? "border-amber-300/60 bg-amber-300/10" : "border-stone-800 bg-stone-900"}`}
                     >
-                      <div className="flex items-center justify-between gap-4">
-                        <div>
-                          <p className="text-base font-semibold text-stone-50">
-                            {family.name}
-                          </p>
-                          <p className="mt-1 text-sm text-stone-400">
-                            Role: {family.role}
-                          </p>
+                      <button aria-pressed={family._id === activeFamilyId} className="w-full min-w-0 rounded-xl px-2 py-2 text-left transition hover:bg-stone-800/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200" onClick={() => setSelectedFamilyId(family._id)} type="button">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <p className="break-words text-base font-semibold text-stone-50">{family.name}</p>
+                            <p className="mt-1 text-sm text-stone-400">Role: {family.role}</p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-xs uppercase tracking-[0.25em] text-stone-500">Invite</p>
+                            <p className="mt-1 font-mono text-sm text-amber-300">{family.inviteCode}</p>
+                          </div>
                         </div>
-                        <div className="text-right">
-                          <p className="text-xs uppercase tracking-[0.25em] text-stone-500">
-                            Invite
-                          </p>
-                          <p className="mt-1 font-mono text-sm text-amber-300">
-                            {family.inviteCode}
-                          </p>
-                        </div>
-                      </div>
+                      </button>
                       {family._id === activeFamilyId && family.role === "owner" ? (
                         <button
-                          className="mt-3 rounded-xl border border-amber-300/30 px-3 py-2 text-xs font-medium text-amber-100 transition hover:border-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="m-2 mt-1 min-h-11 rounded-xl border border-amber-300/30 px-3 py-2 text-xs font-medium text-amber-100 transition hover:border-amber-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
                           disabled={submitting}
                           onClick={onRegenerateInviteCode}
                           type="button"
@@ -666,7 +950,7 @@ export function AuthPanel() {
                         </button>
                       ) : family._id === activeFamilyId ? (
                         <button
-                          className="mt-3 rounded-xl border border-rose-400/30 px-3 py-2 text-xs font-medium text-rose-100 transition hover:border-rose-300 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="m-2 mt-1 min-h-11 rounded-xl border border-rose-400/30 px-3 py-2 text-xs font-medium text-rose-100 transition hover:border-rose-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-200 disabled:cursor-not-allowed disabled:opacity-60"
                           disabled={submitting}
                           onClick={onLeaveFamily}
                           type="button"
@@ -674,27 +958,70 @@ export function AuthPanel() {
                           Leave family
                         </button>
                       ) : null}
-                    </div>
+                    </article>
                   ))
                 )}
               </div>
             </div>
 
-            <div className="mt-4 space-y-4 rounded-3xl border border-stone-800 bg-stone-950/70 p-5">
+            <div className="mt-4 space-y-4 rounded-3xl border border-stone-800 bg-stone-950/70 p-4 sm:p-5">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm uppercase tracking-[0.3em] text-stone-400">
                     Setup
                   </p>
                   <h3 className="mt-2 text-xl font-semibold text-stone-50">
-                    Manage family access
+                    Profile &amp; setup
                   </h3>
                 </div>
               </div>
 
-              <form className="flex flex-wrap gap-2" onSubmit={onUpdateName}>
-                <input aria-label="Your name" autoComplete="name" className="min-w-0 flex-1 rounded-xl border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-50 outline-none focus:border-amber-300" minLength={2} onChange={(event) => setDisplayName(event.target.value)} placeholder="How should your family see you?" required value={displayName} />
-                <button className="rounded-xl border border-amber-300/60 px-3 py-2 text-sm text-amber-100 disabled:opacity-50" disabled={submitting} type="submit">Save name</button>
+              <div className="flex flex-col gap-4 rounded-2xl border border-stone-800 bg-stone-900/70 p-4 sm:flex-row sm:items-center">
+                <MemberAvatar
+                  className="size-20"
+                  image={user?.image}
+                  label={user?.name ?? user?.email ?? "Authenticated user"}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-stone-100">Your picture</p>
+                  <p className="mt-1 text-xs leading-5 text-stone-400">
+                    JPEG, PNG, or WebP, up to 5 MB.
+                  </p>
+                  <input
+                    ref={profileImageInputRef}
+                    accept="image/jpeg,image/png,image/webp"
+                    aria-label="Choose your profile picture"
+                    className="hidden"
+                    disabled={submitting}
+                    onChange={onProfileImageSelected}
+                    type="file"
+                  />
+                  <div className="mt-3 grid gap-2 sm:flex sm:flex-wrap">
+                    <button
+                      className="min-h-11 rounded-xl border border-amber-300/60 px-3 py-2 text-sm text-amber-100 transition hover:border-amber-200 disabled:opacity-50"
+                      disabled={submitting}
+                      onClick={() => profileImageInputRef.current?.click()}
+                      type="button"
+                    >
+                      {user?.image ? "Update picture" : "Add picture"}
+                    </button>
+                    {user?.image ? (
+                      <button
+                        className="min-h-11 rounded-xl border border-rose-400/40 px-3 py-2 text-sm text-rose-100 transition hover:border-rose-300 disabled:opacity-50"
+                        disabled={submitting}
+                        onClick={() => void onRemoveProfileImage()}
+                        type="button"
+                      >
+                        Remove picture
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+
+              <form className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={onUpdateName}>
+                <input aria-label="Your name" autoComplete="name" className="min-h-11 min-w-0 rounded-xl border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-50 outline-none transition focus:border-amber-300 focus-visible:ring-2 focus-visible:ring-amber-300/30" minLength={2} onChange={(event) => setDisplayName(event.target.value)} placeholder="How should your family see you?" required value={displayName} />
+                <button className="min-h-11 rounded-xl border border-amber-300/60 px-3 py-2 text-sm text-amber-100 transition hover:border-amber-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 disabled:opacity-50" disabled={submitting} type="submit">Save name</button>
               </form>
 
               <form className="space-y-3" onSubmit={onCreateFamily}>
@@ -749,11 +1076,13 @@ export function AuthPanel() {
                 </button>
               </form>
             </div>
-          </aside>
+              </aside>
+            </>
+          ) : null}
         </div>
       </Authenticated>
 
-      {status ? <div aria-live="polite" className="fixed bottom-5 left-1/2 z-50 w-[min(28rem,calc(100%-2rem))] -translate-x-1/2 rounded-2xl border border-amber-300/30 bg-stone-900/95 px-4 py-3 text-center text-sm text-stone-100 shadow-2xl shadow-black/40 backdrop-blur" role="status">{status}</div> : null}
+      {status ? <div aria-live="polite" className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] left-1/2 z-70 w-[min(28rem,calc(100%-2rem))] -translate-x-1/2 break-words rounded-2xl border border-amber-300/30 bg-stone-900/95 px-4 py-3 text-center text-sm text-stone-100 shadow-2xl shadow-black/40 backdrop-blur" role="status">{status}</div> : null}
     </div>
   );
 }

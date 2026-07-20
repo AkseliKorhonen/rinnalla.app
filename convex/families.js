@@ -47,6 +47,14 @@ async function requireOwner(ctx, familyId, userId) {
   return membership;
 }
 
+async function profileImageUrl(ctx, user) {
+  if (user?.profileImageStorageId !== undefined) {
+    const url = await ctx.storage.getUrl(user.profileImageStorageId);
+    if (url !== null) return url;
+  }
+  return user?.image ?? null;
+}
+
 export const listMy = query({
   args: {},
   handler: async (ctx) => {
@@ -97,19 +105,20 @@ export const dashboard = query({
       .query("familyMembers")
       .withIndex("by_familyId", (q) => q.eq("familyId", args.familyId))
       .take(20);
-    const members = [];
-    for (const member of memberships) {
-      const user = await ctx.db.get(member.userId);
-      members.push({
-        _id: member._id,
-        userId: member.userId,
-        email: user?.email ?? null,
-        name: user?.name ?? null,
-        image: user?.image ?? null,
-        role: member.role,
-        joinedAt: member.joinedAt,
-      });
-    }
+    const members = await Promise.all(
+      memberships.map(async (member) => {
+        const user = await ctx.db.get(member.userId);
+        return {
+          _id: member._id,
+          userId: member.userId,
+          email: user?.email ?? null,
+          name: user?.name ?? null,
+          image: await profileImageUrl(ctx, user),
+          role: member.role,
+          joinedAt: member.joinedAt,
+        };
+      }),
+    );
 
     members.sort((left, right) => right.joinedAt - left.joinedAt);
 

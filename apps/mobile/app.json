@@ -3,12 +3,18 @@
     "name": "rinnalla.app",
     "slug": "rinnalla-app",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "plugins": [
       "expo-secure-store",
       "expo-dev-client",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow rinnalla.app to access your photos so you can choose a profile picture."
+        }
+      ],
       "@config-plugins/react-native-webrtc",
       "@config-plugins/react-native-callkeep",
       "@react-native-firebase/app",

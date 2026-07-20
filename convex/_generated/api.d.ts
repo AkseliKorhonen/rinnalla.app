@@ -14,10 +14,13 @@ import type * as callNotificationData from "../callNotificationData.js";
 import type * as callNotifications from "../callNotifications.js";
 import type * as calls from "../calls.js";
 import type * as crons from "../crons.js";
+import type * as emailVerificationMigration from "../emailVerificationMigration.js";
 import type * as families from "../families.js";
 import type * as http from "../http.js";
 import type * as notes from "../notes.js";
+import type * as profileImageActions from "../profileImageActions.js";
 import type * as pushTokens from "../pushTokens.js";
+import type * as resendEmailVerification from "../resendEmailVerification.js";
 import type * as resendPasswordReset from "../resendPasswordReset.js";
 import type * as users from "../users.js";
 
@@ -34,10 +37,13 @@ declare const fullApi: ApiFromModules<{
   callNotifications: typeof callNotifications;
   calls: typeof calls;
   crons: typeof crons;
+  emailVerificationMigration: typeof emailVerificationMigration;
   families: typeof families;
   http: typeof http;
   notes: typeof notes;
+  profileImageActions: typeof profileImageActions;
   pushTokens: typeof pushTokens;
+  resendEmailVerification: typeof resendEmailVerification;
   resendPasswordReset: typeof resendPasswordReset;
   users: typeof users;
 }>;

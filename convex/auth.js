@@ -1,5 +1,6 @@
 import { convexAuth } from "@convex-dev/auth/server";
 import { Password } from "@convex-dev/auth/providers/Password";
+import { resendEmailVerification } from "./resendEmailVerification";
 import { resendPasswordReset } from "./resendPasswordReset";
 
 function normalizeName(value) {
@@ -26,6 +27,7 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         return { email: params.email };
       },
       reset: resendPasswordReset,
+      verify: resendEmailVerification,
     }),
   ],
 });

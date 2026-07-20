@@ -9,5 +9,10 @@ android/
 ios/
 dist/
 
+# Local development orchestration output
+/.dev/
+/.metro*.log
+/.next-dev*.log
+
 # Local Android signing credentials
 apps/mobile/credentials/

@@ -17,12 +17,15 @@
     "expo": "~56.0.0",
     "expo-crypto": "~56.0.4",
     "expo-dev-client": "~56.0.22",
+    "expo-file-system": "~56.0.8",
+    "expo-image-picker": "~56.0.21",
     "expo-secure-store": "~56.0.4",
     "expo-status-bar": "~56.0.4",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
     "react-native": "0.85.3",
     "react-native-callkeep": "^4.3.16",
+    "react-native-safe-area-context": "~5.7.0",
     "react-native-webrtc": "^124.0.7"
   },
   "devDependencies": {

@@ -4,6 +4,8 @@ import * as SecureStore from "expo-secure-store";
 const DEVICE_ID_STORAGE_KEY = "rinnalla.device-id.v1";
 const CALL_NOTIFICATIONS_ENABLED_STORAGE_KEY =
   "rinnalla.call-notifications-enabled.v1";
+const AUTO_ANSWER_CALLS_STORAGE_KEY_PREFIX =
+  "rinnalla.auto-answer-calls.v1";
 const RESOLVED_CALLS_STORAGE_KEY = "rinnalla.resolved-native-calls.v1";
 const RESOLVED_CALL_TTL_MS = 24 * 60 * 60 * 1_000;
 const MAX_RESOLVED_CALLS = 20;
@@ -21,6 +23,24 @@ let callNotificationsEnabledWrites = Promise.resolve();
 let resolvedCallCache: ResolvedCallTombstone[] | null = null;
 let resolvedCallLoad: Promise<ResolvedCallTombstone[]> | null = null;
 let resolvedCallWrites = Promise.resolve();
+
+function autoAnswerCallsStorageKey(userId: string) {
+  return `${AUTO_ANSWER_CALLS_STORAGE_KEY_PREFIX}.${userId}`;
+}
+
+export async function getAutoAnswerCallsEnabled(userId: string) {
+  return await SecureStore.getItemAsync(autoAnswerCallsStorageKey(userId)) === "true";
+}
+
+export async function setAutoAnswerCallsEnabled(
+  userId: string,
+  enabled: boolean,
+) {
+  await SecureStore.setItemAsync(
+    autoAnswerCallsStorageKey(userId),
+    enabled ? "true" : "false",
+  );
+}
 
 export async function getDeviceId() {
   if (cachedDeviceId !== null) return cachedDeviceId;

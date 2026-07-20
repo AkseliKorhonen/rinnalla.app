@@ -16,6 +16,7 @@ vi.mock("convex/react", () => ({
   Authenticated: ({ children }: { children: ReactNode }) => children,
   AuthLoading: () => null,
   Unauthenticated: ({ children }: { children: ReactNode }) => children,
+  useAction: (reference: unknown) => mutationMock(reference),
   useConvexAuth: () => useConvexAuthMock(),
   useMutation: (reference: unknown) => mutationMock(reference),
   useQuery: (...args: unknown[]) => queryMock(...args),
@@ -99,11 +100,14 @@ describe("AuthPanel", () => {
       });
     const { AuthPanel } = await import("./auth-panel");
 
-    renderToString(<AuthPanel />);
+    const html = renderToString(<AuthPanel />);
 
     const queryArgs = queryMock.mock.calls;
     expect(queryArgs[0]).toHaveLength(1);
     expect(queryArgs[1][1]).toEqual({});
     expect(queryArgs[2][1]).toEqual({ familyId: "family_1" });
+    expect(html).toContain('aria-controls="household-settings-panel"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('aria-label="Open household settings"');
   });
 });

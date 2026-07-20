@@ -17,7 +17,7 @@ import type * as crons from "../crons.js";
 import type * as emailVerificationMigration from "../emailVerificationMigration.js";
 import type * as families from "../families.js";
 import type * as http from "../http.js";
-import type * as notes from "../notes.js";
+import type * as migrations from "../migrations.js";
 import type * as profileImageActions from "../profileImageActions.js";
 import type * as pushTokens from "../pushTokens.js";
 import type * as resendEmailVerification from "../resendEmailVerification.js";
@@ -40,7 +40,7 @@ declare const fullApi: ApiFromModules<{
   emailVerificationMigration: typeof emailVerificationMigration;
   families: typeof families;
   http: typeof http;
-  notes: typeof notes;
+  migrations: typeof migrations;
   profileImageActions: typeof profileImageActions;
   pushTokens: typeof pushTokens;
   resendEmailVerification: typeof resendEmailVerification;
@@ -74,4 +74,6 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: {
+  migrations: import("@convex-dev/migrations/_generated/component.js").ComponentApi<"migrations">;
+};

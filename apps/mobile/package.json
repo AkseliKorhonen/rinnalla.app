@@ -13,10 +13,10 @@
     "@config-plugins/react-native-webrtc": "^15.0.1",
     "@react-native-firebase/app": "^25.1.0",
     "@react-native-firebase/messaging": "^25.1.0",
-    "convex": "^1.42.1",
-    "expo": "~56.0.0",
+    "convex": "^1.42.3",
+    "expo": "~56.0.16",
     "expo-crypto": "~56.0.4",
-    "expo-dev-client": "~56.0.22",
+    "expo-dev-client": "~56.0.23",
     "expo-file-system": "~56.0.8",
     "expo-image-picker": "~56.0.21",
     "expo-secure-store": "~56.0.4",
@@ -42,6 +42,7 @@
     "doctor": {
       "reactNativeDirectoryCheck": {
         "exclude": [
+          "react-native-callkeep",
           "react-native-webrtc"
         ]
       }

@@ -18,10 +18,10 @@ Run the full suite before a commit or handoff:
 npm run verify
 ```
 
-The full suite checks React/React Native renderer compatibility, tests, both
-TypeScript projects, web lint, and the production web build. Checks run in
-parallel. If a check fails, the command prints its final diagnostic lines and the
-path to its full log.
+The full suite checks React/React Native renderer compatibility, Expo Doctor,
+tests, both TypeScript projects, repository and web lint, and the production web
+build. Checks run in parallel. If a check fails, the command prints its final
+diagnostic lines and the path to its full log.
 
 ## Build and install Android
 

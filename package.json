@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "description": "Stay connected with the people alongside you.",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "npm run dev --workspace web",
     "dev:web": "npm run dev --workspace web",
@@ -11,7 +14,10 @@
     "dev:ios": "npm run ios --workspace mobile",
     "dev:convex": "npx convex dev",
     "build:web": "npm run build --workspace web",
+    "lint": "npm run lint:code && npm run lint:web",
+    "lint:code": "eslint apps/mobile convex scripts",
     "lint:web": "npm run lint --workspace web",
+    "doctor:mobile": "expo-doctor apps/mobile",
     "test": "vitest run",
     "test:watch": "vitest",
     "verify": "node scripts/verify.mjs --all",
@@ -42,17 +48,25 @@
   "dependencies": {
     "@auth/core": "^0.41.1",
     "@convex-dev/auth": "^0.0.94",
+    "@convex-dev/migrations": "^0.3.5",
     "@oslojs/crypto": "^1.0.1",
-    "convex": "^1.42.1",
+    "convex": "^1.42.3",
     "dotenv": "^17.4.2",
-    "firebase-admin": "^13.7.0",
+    "firebase-admin": "^13.10.0",
     "resend": "^6.17.2"
   },
   "devDependencies": {
     "@edge-runtime/vm": "^5.0.0",
+    "@eslint/js": "^9.39.5",
     "convex-test": "^0.0.54",
+    "eslint": "^9.39.5",
+    "expo-doctor": "1.20.1",
+    "globals": "^16.5.0",
     "next": "^16.2.10",
     "patch-package": "^8.0.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "typescript-eslint": "^8.64.0",
     "vitest": "^4.1.10"
   }
 }

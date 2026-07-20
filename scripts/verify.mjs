@@ -55,10 +55,15 @@ const allTasks = {
     ...npxInvocation(["tsc", "--noEmit", "-p", "apps/mobile/tsconfig.json"]),
     label: "Mobile typecheck",
   },
+  mobileDoctor: {
+    ...npmInvocation(["run", "doctor:mobile"]),
+    label: "Expo Doctor",
+  },
   webTypecheck: {
     ...npxInvocation(["tsc", "--noEmit", "-p", "apps/web/tsconfig.json"]),
     label: "Web typecheck",
   },
+  codeLint: { ...npmInvocation(["run", "lint:code"]), label: "Code lint" },
   webLint: { ...npmInvocation(["run", "lint:web"]), label: "Web lint" },
   webBuild: { ...npmInvocation(["run", "build:web"]), label: "Web build" },
 };
@@ -72,15 +77,19 @@ function selectTasks() {
     (file) =>
       file === "package.json"
       || file === "package-lock.json"
+      || file === "eslint.config.mjs"
       || file === "vitest.config.ts"
       || file.startsWith("scripts/"),
   );
 
   if (affectsEverything || files.some((file) => file.startsWith("convex/"))) {
     selected.add("tests");
+    selected.add("codeLint");
   }
   if (affectsEverything || files.some((file) => file.startsWith("apps/mobile/"))) {
     selected.add("mobileTypecheck");
+    selected.add("mobileDoctor");
+    selected.add("codeLint");
   }
   if (affectsEverything || files.some((file) => file.startsWith("apps/web/"))) {
     selected.add("webTypecheck");

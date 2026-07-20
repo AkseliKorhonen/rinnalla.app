@@ -41,6 +41,7 @@ import { FamilyCallPanel } from "./family-call-panel";
 import { MemberAvatar } from "./member-avatar";
 import { ResponsiveDrawer } from "./responsive-drawer";
 import { useResponsiveLayout } from "./responsive-layout";
+import { uploadProfileImageFile } from "./profile-image-upload";
 import { registerIncomingCallNotifications } from "./call-notifications";
 import {
   getAutoAnswerCallsEnabled,
@@ -58,12 +59,6 @@ import {
 const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL;
 const REGISTRATION_CLEANUP_TIMEOUT_MS = 3_000;
 const REGISTRATION_RETRY_MAX_MS = 60_000;
-const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
-const PROFILE_IMAGE_CONTENT_TYPES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
 
 async function waitForPromisesWithTimeout(
   promises: Promise<unknown>[],
@@ -97,11 +92,6 @@ type AuthScreen = "signIn" | "signUp" | "verifyEmail" | "resetRequest" | "resetV
 
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
-}
-
-function profileImageContentType(mimeType: string | null | undefined) {
-  if (mimeType === "image/jpg") return "image/jpeg";
-  return mimeType ?? "image/jpeg";
 }
 
 function Button({
@@ -750,37 +740,14 @@ function FamilyHome() {
       if (result.canceled) return;
 
       const asset = result.assets[0];
-      const contentType = profileImageContentType(asset.mimeType);
-      if (!PROFILE_IMAGE_CONTENT_TYPES.has(contentType)) {
-        throw new Error("Choose a JPEG, PNG, or WebP image.");
-      }
-      if (
-        asset.fileSize !== undefined
-        && asset.fileSize > MAX_PROFILE_IMAGE_BYTES
-      ) {
-        throw new Error("Profile pictures must be 5 MB or smaller.");
-      }
-
       const image = new File(asset.uri);
-      if (!image.exists) throw new Error("Could not read the selected picture.");
-      if (image.size > MAX_PROFILE_IMAGE_BYTES) {
-        throw new Error("Profile pictures must be 5 MB or smaller.");
-      }
-
-      const uploadUrl = await generateProfileImageUploadUrl({});
-      const uploadResponse = await image.upload(uploadUrl, {
-        headers: { "Content-Type": contentType },
-        httpMethod: "POST",
+      await uploadProfileImageFile<Id<"_storage">>({
+        asset,
+        file: image,
+        generateUploadUrl: async () => await generateProfileImageUploadUrl({}),
+        updateProfileImage,
         uploadType: UploadType.BINARY_CONTENT,
       });
-      if (uploadResponse.status < 200 || uploadResponse.status >= 300) {
-        throw new Error("Could not upload your picture.");
-      }
-      const upload = JSON.parse(uploadResponse.body) as {
-        storageId?: Id<"_storage">;
-      };
-      if (!upload.storageId) throw new Error("The upload did not return a file ID.");
-      await updateProfileImage({ storageId: upload.storageId });
       setStatus("Your picture has been updated.");
     } catch (error) {
       setStatus(getErrorMessage(error, "Could not update your picture."));

@@ -172,21 +172,23 @@ export function waitForCallAppForeground(timeoutMs = 5_000) {
 
   return new Promise<void>((resolve, reject) => {
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    let subscription: ReturnType<typeof AppState.addEventListener> | undefined;
+    const resources: {
+      timeout?: ReturnType<typeof setTimeout>;
+      subscription?: ReturnType<typeof AppState.addEventListener>;
+    } = {};
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
-      if (timeout) clearTimeout(timeout);
-      subscription?.remove();
+      if (resources.timeout) clearTimeout(resources.timeout);
+      resources.subscription?.remove();
       if (error) reject(error);
       else resolve();
     };
 
-    subscription = AppState.addEventListener("change", (state) => {
+    resources.subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") finish();
     });
-    timeout = setTimeout(() => {
+    resources.timeout = setTimeout(() => {
       finish(new Error("Open rinnalla.app to enable the camera for this call."));
     }, timeoutMs);
 

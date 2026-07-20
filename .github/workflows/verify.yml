@@ -1,6 +1,8 @@
 name: Verify
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -16,6 +18,8 @@ jobs:
     name: Test, typecheck, lint, and build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_CONVEX_URL: ${{ vars.DEV_CONVEX_URL }}
 
     steps:
       - name: Check out source
@@ -30,6 +34,13 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Verify development backend URL
+        run: |
+          test -n "$NEXT_PUBLIC_CONVEX_URL" || {
+            echo "Set the DEV_CONVEX_URL repository variable before verifying." >&2
+            exit 1
+          }
 
       - name: Verify repository
         run: npm run verify

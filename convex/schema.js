@@ -35,8 +35,8 @@ export default defineSchema({
     .index("by_familyId", ["familyId"])
     .index("by_familyId_and_userId", ["familyId", "userId"]),
   familyPresence: defineTable({
-    // Deprecated: retained during the staged removal so existing documents stay
-    // schema-valid. No application code reads or writes this table.
+    // Deprecated: retained until the cleanup migration has completed in every
+    // deployment. No application code reads or writes this table.
     familyId: v.id("families"),
     userId: v.id("users"),
     lastSeenAt: v.number(),
@@ -97,6 +97,8 @@ export default defineSchema({
     .index("by_userId_and_deviceId", ["userId", "deviceId"])
     .index("by_userId_and_platform", ["userId", "platform"]),
   notes: defineTable({
+    // Deprecated: the sample API was removed. Retain this table until the
+    // cleanup migration has completed in every deployment.
     text: v.string(),
     createdAt: v.number(),
   }),

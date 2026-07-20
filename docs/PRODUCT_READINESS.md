@@ -6,10 +6,9 @@ depend on the service.
 
 ## Identity and distribution
 
-- [ ] Choose the permanent Android application ID to replace
-  `com.anonymous.rinnallaapp`.
-- [ ] Add that exact Android application ID as a Firebase Android client and
-  replace the development `google-services.json` in the same change.
+- [x] Use `app.rinnalla` as the permanent Android application ID.
+- [x] Register `app.rinnalla` as a Firebase Android client and use its
+  `google-services.json` in local and CI development builds.
 - [ ] Decide whether to rename the GitHub repository from `VaariTablet`, then
   update the Pages base path, APK URL, repository metadata, and editor settings.
 - [ ] Separate development and production Firebase, Convex, signing, package,

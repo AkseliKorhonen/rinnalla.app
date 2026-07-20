@@ -54,7 +54,7 @@
         "backgroundColor": "#ffffff"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.rinnallaapp"
+      "package": "app.rinnalla"
     },
     "web": {
       "favicon": "./assets/favicon.png"

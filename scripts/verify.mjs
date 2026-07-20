@@ -45,6 +45,11 @@ function changedFiles() {
 }
 
 const allTasks = {
+  androidIdentity: {
+    command: process.execPath,
+    args: [path.join("scripts", "check-android-identity.mjs")],
+    label: "Android identity",
+  },
   compatibility: {
     command: process.execPath,
     args: [path.join("scripts", "check-react-native-versions.mjs")],
@@ -72,7 +77,7 @@ function selectTasks() {
   if (mode === "all") return Object.values(allTasks);
 
   const files = changedFiles();
-  const selected = new Set(["compatibility"]);
+  const selected = new Set(["androidIdentity", "compatibility"]);
   const affectsEverything = files.some(
     (file) =>
       file === "package.json"

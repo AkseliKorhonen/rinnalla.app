@@ -28,7 +28,7 @@ jobs:
     env:
       EXPO_PUBLIC_CONVEX_URL: ${{ vars.DEV_CONVEX_URL }}
       EXPO_PUBLIC_DIRECT_FCM_ENABLED: "true"
-      ANDROID_PACKAGE_NAME: com.anonymous.rinnallaapp
+      ANDROID_PACKAGE_NAME: app.rinnalla
       ANDROID_DEV_KEY_ALIAS: rinnalla-development
       ANDROID_DEV_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_DEV_KEYSTORE_PASSWORD }}
       ANDROID_DEV_KEY_PASSWORD: ${{ secrets.ANDROID_DEV_KEY_PASSWORD }}

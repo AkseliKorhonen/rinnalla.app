@@ -14,7 +14,7 @@ Set-StrictMode -Version Latest
 $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $MobileRoot = Join-Path $RepositoryRoot "apps\mobile"
 $AndroidRoot = Join-Path $MobileRoot "android"
-$PackageName = "com.anonymous.rinnallaapp"
+$PackageName = "app.rinnalla"
 $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $LogDirectory = Join-Path $RepositoryRoot ".dev\logs\android\$Timestamp"
 New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
@@ -261,6 +261,16 @@ if ($BuildRequested) {
   }
   Invoke-Logged "android-release-configuration" $Node `
     @((Join-Path $RepositoryRoot "scripts\configure-android-release.mjs")) $RepositoryRoot
+
+  $AutolinkingPaths = @(
+    (Join-Path $AndroidRoot "build\generated\autolinking"),
+    (Join-Path $AndroidRoot "app\build\generated\autolinking")
+  )
+  foreach ($AutolinkingPath in $AutolinkingPaths) {
+    if (Test-Path $AutolinkingPath) {
+      Remove-Item -LiteralPath $AutolinkingPath -Recurse -Force
+    }
+  }
 
   $Bundle = Join-Path $AndroidRoot "app\build\generated\assets\react\release\index.android.bundle"
   $SourceMap = Join-Path $AndroidRoot "app\build\intermediates\sourcemaps\react\release\index.android.bundle.packager.map"

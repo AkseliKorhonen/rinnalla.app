@@ -1,6 +1,6 @@
 const { withMainActivity } = require("@expo/config-plugins");
 
-const CALL_LAUNCH_TOKEN_EXTRA = "com.rinnalla.app.extra.CALL_LAUNCH_TOKEN";
+const CALL_LAUNCH_TOKEN_EXTRA = "app.rinnalla.extra.CALL_LAUNCH_TOKEN";
 const CALL_LAUNCH_PREFERENCES = "rinnalla-call-screen";
 const CALL_LAUNCH_TOKEN_KEY = "authorized-launch-token";
 const HELPER_MARKER = "// @rinnalla/call-lock-screen-helper";

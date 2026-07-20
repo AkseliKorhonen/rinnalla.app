@@ -37,7 +37,7 @@ index 025480a..cdfb011 100644
  
      private static final String E_ACTIVITY_DOES_NOT_EXIST = "E_ACTIVITY_DOES_NOT_EXIST";
      private static final String REACT_NATIVE_MODULE_NAME = "RNCallKeep";
-+    private static final String EXTRA_CALL_LAUNCH_TOKEN = "com.rinnalla.app.extra.CALL_LAUNCH_TOKEN";
++    private static final String EXTRA_CALL_LAUNCH_TOKEN = "app.rinnalla.extra.CALL_LAUNCH_TOKEN";
 +    private static final String CALL_LAUNCH_PREFERENCES = "rinnalla-call-screen";
 +    private static final String CALL_LAUNCH_TOKEN_KEY = "authorized-launch-token";
 +    private static final String CALL_SCREEN_ACTIVE_KEY = "call-screen-active";

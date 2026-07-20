@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [string[]]$DeviceSerial = @(),
-  [string]$PackageName = "com.anonymous.rinnallaapp"
+  [string]$PackageName = "app.rinnalla"
 )
 
 $ErrorActionPreference = "Stop"

@@ -22,6 +22,7 @@
     "test:watch": "vitest",
     "verify": "node scripts/verify.mjs --all",
     "verify:changed": "node scripts/verify.mjs --changed",
+    "verify:android-identity": "node scripts/check-android-identity.mjs",
     "verify:react-native": "node scripts/check-react-native-versions.mjs",
     "android:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/android-local.ps1 -Action Build",
     "android:install-all": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/android-local.ps1 -Action BuildInstall",

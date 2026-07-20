@@ -36,14 +36,14 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/AkseliKorhonen/VaariTablet.git"
+    "url": "git+https://github.com/AkseliKorhonen/rinnalla.app.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "bugs": {
-    "url": "https://github.com/AkseliKorhonen/VaariTablet/issues"
+    "url": "https://github.com/AkseliKorhonen/rinnalla.app/issues"
   },
   "homepage": "https://rinnalla.app",
   "dependencies": {

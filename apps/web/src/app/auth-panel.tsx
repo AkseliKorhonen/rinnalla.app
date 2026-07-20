@@ -28,7 +28,7 @@ type Mode = "signIn" | "signUp";
 type ResetStep = "request" | "verify" | null;
 
 const ANDROID_DEVELOPMENT_APK_URL =
-  "https://github.com/AkseliKorhonen/VaariTablet/releases/download/development/rinnalla-development.apk";
+  "https://github.com/AkseliKorhonen/rinnalla.app/releases/download/development/rinnalla-development.apk";
 const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
 const PROFILE_IMAGE_CONTENT_TYPES = new Set([
   "image/jpeg",

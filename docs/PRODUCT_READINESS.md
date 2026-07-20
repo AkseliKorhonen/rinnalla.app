@@ -9,8 +9,8 @@ depend on the service.
 - [x] Use `app.rinnalla` as the permanent Android application ID.
 - [x] Register `app.rinnalla` as a Firebase Android client and use its
   `google-services.json` in local and CI development builds.
-- [ ] Decide whether to rename the GitHub repository from `VaariTablet`, then
-  update the Pages base path, APK URL, repository metadata, and editor settings.
+- [x] Rename the GitHub repository to `rinnalla.app` and update the Pages base
+  path, APK URL, repository metadata, and editor settings.
 - [ ] Separate development and production Firebase, Convex, signing, package,
   and release configurations.
 - [ ] Establish semantic app versions and a release/changelog process.

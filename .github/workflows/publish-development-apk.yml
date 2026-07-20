@@ -7,6 +7,7 @@ on:
       - "apps/mobile/**"
       - "convex/**"
       - "patches/**"
+      - "scripts/**"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/publish-development-apk.yml"
@@ -57,6 +58,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify React Native runtime compatibility
+        run: node scripts/check-react-native-versions.mjs
+
       - name: Prepare development configuration and signing key
         env:
           ANDROID_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON_BASE64 }}
@@ -101,11 +105,7 @@ jobs:
               exit 1
             }
 
-          version_code=$((100000 + GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))
-          if (( version_code > 2100000000 )); then
-            echo "Computed Android versionCode is too large: $version_code" >&2
-            exit 1
-          fi
+          version_code="$(node scripts/android-version-code.mjs)"
           echo "ANDROID_DEV_KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
           echo "ANDROID_VERSION_CODE=$version_code" >> "$GITHUB_ENV"
 
@@ -116,43 +116,7 @@ jobs:
         run: npx expo prebuild --platform android --clean --no-install
 
       - name: Configure release signing and version
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          build_file = Path("apps/mobile/android/app/build.gradle")
-          marker = "// rinnalla.app development release configuration"
-          if not build_file.is_file():
-              raise SystemExit(f"Expo did not generate {build_file}")
-
-          contents = build_file.read_text(encoding="utf-8")
-          if marker in contents:
-              raise SystemExit("Development release configuration was already added")
-
-          contents += r'''
-
-          // rinnalla.app development release configuration
-          android {
-              defaultConfig {
-                  versionCode Integer.parseInt(System.getenv("ANDROID_VERSION_CODE"))
-              }
-              signingConfigs {
-                  development {
-                      storeFile file(System.getenv("ANDROID_DEV_KEYSTORE_PATH"))
-                      storePassword System.getenv("ANDROID_DEV_KEYSTORE_PASSWORD")
-                      keyAlias System.getenv("ANDROID_DEV_KEY_ALIAS")
-                      keyPassword System.getenv("ANDROID_DEV_KEY_PASSWORD")
-                  }
-              }
-              buildTypes {
-                  release {
-                      signingConfig signingConfigs.development
-                  }
-              }
-          }
-          '''
-          build_file.write_text(contents, encoding="utf-8")
-          PY
+        run: node scripts/configure-android-release.mjs
 
       - name: Build self-contained release APK
         working-directory: apps/mobile/android

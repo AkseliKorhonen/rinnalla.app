@@ -35,6 +35,9 @@ type CallSnapshot = {
     _id: Id<"calls">;
     answerSdp?: string;
     answeredByDeviceId?: string;
+    autoAnswerOfferedAt?: number;
+    autoAnswerOfferedByDeviceId?: string;
+    autoAnswerRequestedAt?: number;
     calleeId: Id<"users">;
     callerDeviceId?: string;
     callerId: Id<"users">;
@@ -183,6 +186,7 @@ export function FamilyCallPanel({
   const declineCall = useMutation(api.calls.decline);
   const endCall = useMutation(api.calls.end);
   const addIceCandidate = useMutation(api.calls.addIceCandidate);
+  const requestAutoAnswer = useMutation(api.calls.requestAutoAnswer);
 
   useEffect(() => {
     const phoneMedia = window.matchMedia("(max-width: 639px)");
@@ -615,8 +619,42 @@ export function FamilyCallPanel({
     }
   };
 
+  const onRequestAutoAnswer = async () => {
+    if (
+      !activeCall
+      || !deviceId
+      || activeCall.status !== "ringing"
+      || activeCall.callerId !== currentUserId
+      || !isOwnedCall
+    ) return;
+    setBusyUserId(activeCall.calleeId);
+    setCallError(null);
+    try {
+      await requestAutoAnswer({ callId: activeCall._id, deviceId });
+    } catch (error) {
+      setCallError(
+        error instanceof Error
+          ? error.message
+          : "Could not request automatic answering.",
+      );
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
   const isOnCall = activeCall !== null;
   const isIncoming = incomingCall !== null;
+  const canRequestAutoAnswer =
+    activeCall?.status === "ringing"
+    && activeCall.callerId === currentUserId
+    && isOwnedCall
+    && activeCall.autoAnswerOfferedByDeviceId !== undefined
+    && activeCall.autoAnswerRequestedAt === undefined;
+  const automaticAnswerRequested =
+    activeCall?.status === "ringing"
+    && activeCall.callerId === currentUserId
+    && isOwnedCall
+    && activeCall.autoAnswerRequestedAt !== undefined;
   const hasForegroundCallSurface =
     !isCallOnAnotherDevice && (isIncoming || isOwnedCall);
   const isPhoneCallDialog = hasForegroundCallSurface && isPhoneViewport;
@@ -758,6 +796,28 @@ export function FamilyCallPanel({
       {isCallOnAnotherDevice ? (
         <p className="rounded-2xl border border-sky-300/30 bg-sky-300/10 px-4 py-3 text-sm text-sky-100">
           {callOnAnotherDeviceMessage}
+        </p>
+      ) : null}
+
+      {canRequestAutoAnswer ? (
+        <div className="flex min-w-0 flex-col gap-3 rounded-2xl border border-sky-300/30 bg-sky-300/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm leading-6 text-sky-100">
+            No answer yet. This device allows you to connect automatically.
+          </p>
+          <button
+            className="min-h-11 shrink-0 rounded-2xl bg-sky-200 px-4 py-3 text-sm font-medium text-stone-950 transition hover:bg-sky-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={busyUserId !== null || deviceId === null}
+            onClick={onRequestAutoAnswer}
+            type="button"
+          >
+            Connect automatically
+          </button>
+        </div>
+      ) : null}
+
+      {automaticAnswerRequested ? (
+        <p aria-live="polite" className="rounded-2xl border border-sky-300/30 bg-sky-300/10 px-4 py-3 text-sm text-sky-100">
+          Automatic answering requested. Waiting for the other device to connect…
         </p>
       ) : null}
 

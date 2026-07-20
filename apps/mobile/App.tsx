@@ -799,7 +799,7 @@ function FamilyHome() {
       await setAutoAnswerCallsEnabled(user._id, enabled);
       setStatus(
         enabled
-          ? "Calls will be answered automatically while rinnalla.app is open."
+          ? "After 10 seconds of ringing, callers can choose automatic answering while rinnalla.app is open."
           : "Automatic call answering is off.",
       );
     } catch (error) {
@@ -1313,7 +1313,7 @@ function FamilyHome() {
             <View style={styles.settingCopy}>
               <Text style={styles.settingTitle}>Answer calls automatically</Text>
               <Text style={styles.drawerMuted}>
-                Connect incoming calls automatically while rinnalla.app is open and visible. Calls received in the background or while the device is locked still require you to answer.
+                Ring normally for 10 seconds, then let the caller choose whether to connect automatically. This is available only while rinnalla.app is open and visible; background or locked calls still require you to answer.
               </Text>
             </View>
             <Switch

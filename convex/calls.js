@@ -5,6 +5,7 @@ import { v } from "convex/values";
 
 const RINGING_TIMEOUT_MS = 2 * 60 * 1000;
 const ACTIVE_CALL_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const AUTO_ANSWER_DELAY_MS = 10 * 1000;
 const EXPIRY_BATCH_SIZE = 100;
 
 function createNativeCallId() {
@@ -301,6 +302,109 @@ export const answer = mutation({
       resolution: "answered",
     });
 
+    return call._id;
+  },
+});
+
+export const offerAutoAnswer = mutation({
+  args: {
+    callId: v.id("calls"),
+    deviceId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUserId(ctx);
+    const call = await getCallForUser(ctx, args.callId, userId);
+
+    if (call.calleeId !== userId) {
+      throw new Error("Only the callee can offer auto-answer");
+    }
+    if (call.status !== "ringing") {
+      throw new Error("Call is no longer ringing");
+    }
+    if (args.deviceId.trim().length === 0) {
+      throw new Error("A device ID is required to offer auto-answer");
+    }
+    if (Date.now() - call.createdAt < AUTO_ANSWER_DELAY_MS) {
+      throw new Error("Auto-answer is not available yet");
+    }
+    if (
+      call.autoAnswerOfferedByDeviceId !== undefined
+      && call.autoAnswerOfferedByDeviceId !== args.deviceId
+    ) {
+      return false;
+    }
+    if (call.autoAnswerOfferedByDeviceId === args.deviceId) {
+      return true;
+    }
+
+    await ctx.db.patch(call._id, {
+      autoAnswerOfferedByDeviceId: args.deviceId,
+      autoAnswerOfferedAt: Date.now(),
+    });
+    return true;
+  },
+});
+
+export const revokeAutoAnswerOffer = mutation({
+  args: {
+    callId: v.id("calls"),
+    deviceId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUserId(ctx);
+    const call = await getCallForUser(ctx, args.callId, userId);
+
+    if (call.calleeId !== userId) {
+      throw new Error("Only the callee can revoke auto-answer");
+    }
+    if (
+      call.status !== "ringing"
+      || call.autoAnswerOfferedByDeviceId !== args.deviceId
+    ) {
+      return false;
+    }
+
+    await ctx.db.patch(call._id, {
+      autoAnswerOfferedByDeviceId: undefined,
+      autoAnswerOfferedAt: undefined,
+      autoAnswerRequestedAt: undefined,
+    });
+    return true;
+  },
+});
+
+export const requestAutoAnswer = mutation({
+  args: {
+    callId: v.id("calls"),
+    deviceId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUserId(ctx);
+    const call = await getCallForUser(ctx, args.callId, userId);
+
+    if (call.callerId !== userId) {
+      throw new Error("Only the caller can request auto-answer");
+    }
+    if (call.status !== "ringing") {
+      throw new Error("Call is no longer ringing");
+    }
+    if (args.deviceId.trim().length === 0) {
+      throw new Error("A device ID is required to request auto-answer");
+    }
+    if (!callerDeviceOwnsRingingCall(call, userId, args.deviceId)) {
+      throw new Error("This device does not own the call");
+    }
+    if (
+      call.autoAnswerOfferedByDeviceId === undefined
+      || call.autoAnswerOfferedAt === undefined
+      || Date.now() - call.createdAt < AUTO_ANSWER_DELAY_MS
+    ) {
+      throw new Error("Auto-answer is not available");
+    }
+
+    if (call.autoAnswerRequestedAt === undefined) {
+      await ctx.db.patch(call._id, { autoAnswerRequestedAt: Date.now() });
+    }
     return call._id;
   },
 });

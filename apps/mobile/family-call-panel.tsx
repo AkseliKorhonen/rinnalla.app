@@ -21,7 +21,11 @@ import {
   RTCPeerConnection,
   RTCView,
 } from "react-native-webrtc";
-import { shouldAutoAnswerCall } from "./auto-answer-policy";
+import {
+  AUTO_ANSWER_DELAY_MS,
+  canOfferAutoAnswer,
+  shouldAcceptAutoAnswer,
+} from "./auto-answer-policy";
 import {
   bringCallAppToForeground,
   claimIncomingCallInApp,
@@ -65,9 +69,13 @@ type CallSnapshot = {
     _id: Id<"calls">;
     answerSdp?: string;
     answeredByDeviceId?: string;
+    autoAnswerOfferedAt?: number;
+    autoAnswerOfferedByDeviceId?: string;
+    autoAnswerRequestedAt?: number;
     calleeId: Id<"users">;
     callerDeviceId?: string;
     callerId: Id<"users">;
+    createdAt: number;
     offerSdp: string;
     nativeCallId?: string;
     status: "active" | "declined" | "ended" | "ringing";
@@ -199,6 +207,7 @@ export function FamilyCallPanel({
   const watchRef = useRef<CallSnapshot | undefined>(undefined);
   const nativeCallIdRef = useRef<string | null>(null);
   const resolvedNativeCallIdRef = useRef<string | null>(null);
+  const autoAnswerOfferCallIdRef = useRef<Id<"calls"> | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [answeringCallId, setAnsweringCallId] = useState<Id<"calls"> | null>(null);
@@ -212,6 +221,9 @@ export function FamilyCallPanel({
   const declineCall = useMutation(api.calls.decline);
   const endCall = useMutation(api.calls.end);
   const addIceCandidate = useMutation(api.calls.addIceCandidate);
+  const offerAutoAnswer = useMutation(api.calls.offerAutoAnswer);
+  const revokeAutoAnswerOffer = useMutation(api.calls.revokeAutoAnswerOffer);
+  const requestAutoAnswer = useMutation(api.calls.requestAutoAnswer);
   const callState = useQuery(api.calls.watch, { deviceId, familyId }) as CallSnapshot | undefined;
   watchRef.current = callState;
 
@@ -612,6 +624,116 @@ export function FamilyCallPanel({
   };
 
   useEffect(() => {
+    const call = incomingCall;
+    if (
+      !call
+      || !canOfferAutoAnswer(autoAnswerCalls, appState)
+      || call.autoAnswerOfferedByDeviceId !== undefined
+    ) return;
+
+    const timeout = setTimeout(() => {
+      const currentCall = watchRef.current?.call;
+      if (
+        !canOfferAutoAnswer(autoAnswerCalls, AppState.currentState)
+        || currentCall?._id !== call._id
+        || currentCall.status !== "ringing"
+        || currentCall.calleeId !== currentUserId
+        || currentCall.autoAnswerOfferedByDeviceId !== undefined
+      ) return;
+
+      void offerAutoAnswer({ callId: call._id, deviceId })
+        .then((offered) => {
+          if (!offered) return;
+          const currentCallAfterOffer = watchRef.current?.call;
+          if (
+            canOfferAutoAnswer(autoAnswerCalls, AppState.currentState)
+            && currentCallAfterOffer?._id === call._id
+            && currentCallAfterOffer.status === "ringing"
+          ) {
+            autoAnswerOfferCallIdRef.current = call._id;
+            return;
+          }
+          void revokeAutoAnswerOffer({ callId: call._id, deviceId }).catch(
+            () => undefined,
+          );
+        })
+        .catch((offerError) => {
+          setError(offerError instanceof Error
+            ? offerError.message
+            : "Could not make automatic answering available.");
+        });
+    }, AUTO_ANSWER_DELAY_MS);
+
+    return () => clearTimeout(timeout);
+  }, [
+    appState,
+    autoAnswerCalls,
+    currentUserId,
+    deviceId,
+    incomingCall?._id,
+    incomingCall?.autoAnswerOfferedByDeviceId,
+    offerAutoAnswer,
+    revokeAutoAnswerOffer,
+  ]);
+
+  useEffect(() => {
+    const call = incomingCall;
+    if (
+      call?.autoAnswerOfferedByDeviceId === deviceId
+      && canOfferAutoAnswer(autoAnswerCalls, appState)
+    ) {
+      autoAnswerOfferCallIdRef.current = call._id;
+      return;
+    }
+
+    const offeredCallId = autoAnswerOfferCallIdRef.current;
+    if (!offeredCallId) return;
+    autoAnswerOfferCallIdRef.current = null;
+    void revokeAutoAnswerOffer({ callId: offeredCallId, deviceId }).catch(
+      () => undefined,
+    );
+  }, [
+    appState,
+    autoAnswerCalls,
+    deviceId,
+    incomingCall?._id,
+    incomingCall?.autoAnswerOfferedByDeviceId,
+    revokeAutoAnswerOffer,
+  ]);
+
+  useEffect(() => () => {
+    const offeredCallId = autoAnswerOfferCallIdRef.current;
+    if (!offeredCallId) return;
+    autoAnswerOfferCallIdRef.current = null;
+    void revokeAutoAnswerOffer({ callId: offeredCallId, deviceId }).catch(
+      () => undefined,
+    );
+  }, [deviceId, revokeAutoAnswerOffer]);
+
+  useEffect(() => {
+    const call = incomingCall;
+    if (
+      !call
+      || !shouldAcceptAutoAnswer(
+        autoAnswerCalls,
+        appState,
+        deviceId,
+        call.autoAnswerOfferedByDeviceId,
+        call.autoAnswerRequestedAt,
+      )
+      || AppState.currentState !== "active"
+    ) return;
+    void acceptCall(call);
+  }, [
+    appState,
+    autoAnswerCalls,
+    deviceId,
+    incomingCall?._id,
+    incomingCall?.autoAnswerOfferedByDeviceId,
+    incomingCall?.autoAnswerRequestedAt,
+  ]);
+
+  useEffect(() => {
     void initializeNativeCallService().catch((setupError) => {
       setError(setupError instanceof Error ? setupError.message : "Could not set up native calling.");
     });
@@ -701,17 +823,6 @@ export function FamilyCallPanel({
     if (activeCall.status === "ringing") {
       resolvedNativeCallIdRef.current = null;
       void showIncomingCall({ callId: activeCall._id, familyId, nativeCallId: incomingNativeCallId, callerName })
-        .then(() => {
-          const currentCall = watchRef.current?.call;
-          if (
-            !shouldAutoAnswerCall(autoAnswerCalls, appState)
-            || AppState.currentState !== "active"
-            || currentCall?._id !== activeCall._id
-            || currentCall.status !== "ringing"
-            || currentCall.calleeId !== currentUserId
-          ) return;
-          void acceptCall(currentCall);
-        })
         .catch((callError) => setError(callError instanceof Error ? callError.message : "Could not alert you to the incoming call."));
     } else if (activeCall.status === "active") {
       if (isOwnedCall) {
@@ -725,7 +836,27 @@ export function FamilyCallPanel({
         }
       }
     }
-  }, [activeCall, appState, autoAnswerCalls, currentUserId, familyId, isOwnedCall, remoteMember]);
+  }, [activeCall, currentUserId, familyId, isOwnedCall, remoteMember]);
+
+  const askForAutomaticAnswer = async () => {
+    if (
+      !activeCall
+      || activeCall.status !== "ringing"
+      || activeCall.callerId !== currentUserId
+      || !isOwnedCall
+    ) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await requestAutoAnswer({ callId: activeCall._id, deviceId });
+    } catch (requestError) {
+      setError(requestError instanceof Error
+        ? requestError.message
+        : "Could not request automatic answering.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const hangUp = async (call: CallSnapshot["call"] = activeCall) => {
     if (
@@ -743,6 +874,17 @@ export function FamilyCallPanel({
   };
 
   const isConnected = activeCall?.status === "active" && isOwnedCall;
+  const canRequestAutoAnswer =
+    activeCall?.status === "ringing"
+    && activeCall.callerId === currentUserId
+    && isOwnedCall
+    && activeCall.autoAnswerOfferedByDeviceId !== undefined
+    && activeCall.autoAnswerRequestedAt === undefined;
+  const automaticAnswerRequested =
+    activeCall?.status === "ringing"
+    && activeCall.callerId === currentUserId
+    && isOwnedCall
+    && activeCall.autoAnswerRequestedAt !== undefined;
   const isShowingCallScreen =
     isConnected
     || answeringCallId !== null
@@ -872,6 +1014,23 @@ export function FamilyCallPanel({
             />
             <ActivityIndicator color="#bae6fd" size="large" />
             <Text style={styles.waiting}>Connecting video to {labelFor(remoteMember)}…</Text>
+            {canRequestAutoAnswer ? (
+              <View style={styles.autoAnswerAction}>
+                <Text style={styles.autoAnswerText}>
+                  No answer yet. This device allows you to connect automatically.
+                </Text>
+                <Action
+                  disabled={busy}
+                  label="Connect automatically"
+                  onPress={() => void askForAutomaticAnswer()}
+                />
+              </View>
+            ) : null}
+            {automaticAnswerRequested ? (
+              <Text accessibilityLiveRegion="polite" style={styles.autoAnswerText}>
+                Automatic answering requested. Waiting for the other device to connect…
+              </Text>
+            ) : null}
             {error ? <Text accessibilityLiveRegion="assertive" style={styles.callModalErrorText}>{error}</Text> : null}
           </ScrollView>
         ) : null}
@@ -1004,6 +1163,23 @@ export function FamilyCallPanel({
           <View style={styles.video}>{remoteStream ? <RTCView mirror={false} objectFit="cover" streamURL={remoteStream.toURL()} style={styles.rtcView} zOrder={0} /> : <Text style={styles.waiting}>Waiting for {labelFor(remoteMember)}…</Text>}</View>
           <View style={styles.localVideo}>{localStream ? <RTCView mirror objectFit="cover" streamURL={localStream.toURL()} style={styles.rtcView} zOrder={1} /> : null}</View>
         </View>
+        {canRequestAutoAnswer ? (
+          <View style={styles.autoAnswerAction}>
+            <Text style={styles.autoAnswerText}>
+              No answer yet. This device allows you to connect automatically.
+            </Text>
+            <Action
+              disabled={busy}
+              label="Connect automatically"
+              onPress={() => void askForAutomaticAnswer()}
+            />
+          </View>
+        ) : null}
+        {automaticAnswerRequested ? (
+          <Text accessibilityLiveRegion="polite" style={styles.autoAnswerText}>
+            Automatic answering requested. Waiting for the other device to connect…
+          </Text>
+        ) : null}
         <Action label="Hang up" onPress={() => void hangUp()} disabled={busy} danger />
       </> : !incomingCall ? <View style={styles.members}>{callableMembers.length === 0 ? <Text style={styles.waiting}>Add another family member to start a call.</Text> : callableMembers.map((member) => <Action avatar={{ image: member.image, label: labelFor(member) }} key={member.userId} label={`Call ${labelFor(member)}`} onPress={() => void beginCall(member.userId)} disabled={busy} />)}</View> : null}
       {busy ? <ActivityIndicator color="#bae6fd" style={styles.spinner} /> : null}
@@ -1100,6 +1276,23 @@ const styles = StyleSheet.create({
     opacity: 0.01,
     position: "absolute",
     width: 64,
+  },
+  autoAnswerAction: {
+    alignSelf: "center",
+    backgroundColor: "#0c4a6e",
+    borderColor: "#38bdf8",
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 10,
+    maxWidth: 520,
+    padding: 14,
+    width: "100%",
+  },
+  autoAnswerText: {
+    color: "#e0f2fe",
+    fontSize: 15,
+    lineHeight: 21,
+    textAlign: "center",
   },
   panel: {
     backgroundColor: "#082f49",

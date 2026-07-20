@@ -103,6 +103,95 @@ describe("calls", () => {
     await owner.mutation(api.calls.end, { callId });
   });
 
+  test("offers auto-answer after ten seconds and requires the caller to request it", async () => {
+    const t = convexTest({ schema, modules });
+    const { authed: caller, userId: callerId } = await createUser(
+      t,
+      "auto-caller@example.com",
+    );
+    const { authed: callee, userId: calleeId } = await createUser(
+      t,
+      "auto-callee@example.com",
+    );
+
+    await caller.mutation(api.families.create, { name: "Auto answer" });
+    const [family] = await caller.query(api.families.listMy, {});
+    await callee.mutation(api.families.join, {
+      inviteCode: family.inviteCode,
+    });
+    const callId = await caller.mutation(api.calls.start, {
+      calleeId,
+      deviceId: "caller-phone",
+      familyId: family._id,
+      offerSdp: "offer",
+    });
+
+    await expect(callee.mutation(api.calls.offerAutoAnswer, {
+      callId,
+      deviceId: "callee-tablet",
+    })).rejects.toThrow("Auto-answer is not available yet");
+    await expect(caller.mutation(api.calls.offerAutoAnswer, {
+      callId,
+      deviceId: "caller-phone",
+    })).rejects.toThrow("Only the callee can offer auto-answer");
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(callId, { createdAt: Date.now() - 10_001 });
+    });
+    expect(await callee.mutation(api.calls.offerAutoAnswer, {
+      callId,
+      deviceId: "callee-tablet",
+    })).toBe(true);
+    expect(await callee.mutation(api.calls.offerAutoAnswer, {
+      callId,
+      deviceId: "callee-phone",
+    })).toBe(false);
+
+    await expect(callee.mutation(api.calls.requestAutoAnswer, {
+      callId,
+      deviceId: "callee-tablet",
+    })).rejects.toThrow("Only the caller can request auto-answer");
+    await expect(caller.mutation(api.calls.requestAutoAnswer, {
+      callId,
+      deviceId: "",
+    })).rejects.toThrow("A device ID is required to request auto-answer");
+    await expect(caller.mutation(api.calls.requestAutoAnswer, {
+      callId,
+      deviceId: "caller-laptop",
+    })).rejects.toThrow("This device does not own the call");
+    await caller.mutation(api.calls.requestAutoAnswer, {
+      callId,
+      deviceId: "caller-phone",
+    });
+
+    const requested = await callee.query(api.calls.watch, {
+      deviceId: "callee-tablet",
+      familyId: family._id,
+    });
+    expect(requested.call).toMatchObject({
+      autoAnswerOfferedByDeviceId: "callee-tablet",
+      autoAnswerRequestedAt: expect.any(Number),
+      calleeId,
+      callerId,
+      status: "ringing",
+    });
+
+    expect(await callee.mutation(api.calls.revokeAutoAnswerOffer, {
+      callId,
+      deviceId: "callee-phone",
+    })).toBe(false);
+    expect(await callee.mutation(api.calls.revokeAutoAnswerOffer, {
+      callId,
+      deviceId: "callee-tablet",
+    })).toBe(true);
+    const revoked = await caller.query(api.calls.watch, {
+      deviceId: "caller-phone",
+      familyId: family._id,
+    });
+    expect(revoked.call).not.toHaveProperty("autoAnswerOfferedByDeviceId");
+    expect(revoked.call).not.toHaveProperty("autoAnswerRequestedAt");
+  });
+
   test("expires abandoned calls and deletes their signaling candidates", async () => {
     const t = convexTest({ schema, modules });
     const { authed: owner, userId: ownerId } = await createUser(
